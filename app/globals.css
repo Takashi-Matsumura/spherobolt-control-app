@@ -24,3 +24,14 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@layer components {
+  .btn {
+    @apply rounded-md border border-zinc-300 px-3 py-1.5 text-sm transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800;
+    touch-action: none;
+    user-select: none;
+  }
+  .btn-primary {
+    @apply border-transparent bg-blue-600 text-white hover:bg-blue-700 dark:hover:bg-blue-500;
+  }
+}
