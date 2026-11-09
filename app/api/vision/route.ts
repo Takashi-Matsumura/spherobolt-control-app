@@ -44,9 +44,24 @@ async function readBodyLimited(request: Request, limit: number): Promise<string 
   return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
+/** 0〜1 の比率（left/right は幅、top/bottom は高さに対する割合） */
+export type Box = { top: number; bottom: number; left: number; right: number; confidence: number | null };
+
 export type VisionResult =
-  | { ok: true; visible: number; latencyMs: number; model: string }
+  | { ok: true; visible: number; box: Box | null; latencyMs: number; model: string }
   | { ok: false; error: string };
+
+function parseBox(answer: unknown): Box | null {
+  const a = answer as { box?: Record<string, unknown>; confidence?: unknown } | undefined;
+  const b = a?.box;
+  if (!b) return null;
+  const edges = [b.top, b.bottom, b.left, b.right];
+  if (!edges.every((v) => typeof v === "number" && Number.isFinite(v))) return null;
+  const [top, bottom, left, right] = edges as number[];
+  // Box の confidence はドキュメント上「0〜1」だが、OpenAPI では null もあり得る
+  const confidence = typeof a?.confidence === "number" ? a.confidence : null;
+  return { top, bottom, left, right, confidence };
+}
 
 function fail(error: string, status: number) {
   return Response.json({ ok: false, error } satisfies VisionResult, { status });
@@ -82,18 +97,24 @@ export async function POST(request: Request) {
   const assetKey = crypto.randomUUID();
   const body = {
     model: MODEL,
-    state: assetKey,
+    // 質問文から「photo」で画像を指せるよう、state をオブジェクトにする
+    state: { photo: assetKey },
     assets: { [assetKey]: { type: "image", format: "jpeg", data_base64: image } },
     questions: {
       visible: {
         type: "noul",
         instructions:
-          "Is a Sphero BOLT robot visible in this camera image? It is a small transparent spherical robot ball " +
+          "Is a Sphero BOLT robot visible in photo? It is a small transparent spherical robot ball " +
           "(about 7 cm) with visible electronics and glowing LEDs inside.",
         criteria: {
           true: "The robot ball is visible in the image, even if only partially or at the edge of the frame.",
           false: "The robot ball is not in the image.",
         },
+      },
+      // Box は「見つからない」と答えず常に枠を返すので、visible と組み合わせて使う
+      position: {
+        type: "box",
+        instructions: "the Sphero BOLT robot ball (small transparent sphere with glowing LEDs) in photo",
       },
     },
   };
@@ -121,7 +142,10 @@ export async function POST(request: Request) {
     return fail(`Jev エラー ${res.status}: ${detail.slice(0, 300)}`, 502);
   }
 
-  const json = (await res.json()) as { model?: string; answers?: { visible?: { noul?: unknown } } };
+  const json = (await res.json()) as {
+    model?: string;
+    answers?: { visible?: { noul?: unknown }; position?: unknown };
+  };
   const visible = json.answers?.visible?.noul;
   if (typeof visible !== "number" || !Number.isFinite(visible)) {
     return fail("Jev の応答に判定が含まれていません", 502);
@@ -129,6 +153,7 @@ export async function POST(request: Request) {
   return Response.json({
     ok: true,
     visible,
+    box: parseBox(json.answers?.position),
     latencyMs: Date.now() - started,
     model: json.model ?? MODEL,
   } satisfies VisionResult);

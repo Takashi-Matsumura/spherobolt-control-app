@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "BOLT Controller",
-  description: "Sphero BOLT を Web Bluetooth で操作するプロトタイプ",
+  title: "BOLT Pilot",
+  description: "Sphero BOLT を AI の目で自動操縦・手動操作する Web アプリ",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
