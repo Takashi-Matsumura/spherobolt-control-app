@@ -1,4 +1,4 @@
-import BoltController from "./bolt-controller";
+import RobotApp from "./robot-app";
 
 export default function Home() {
   return (
@@ -9,7 +9,7 @@ export default function Home() {
           Web Bluetooth で BOLT に直接接続します。PC 版の Chrome / Edge で使ってください。
         </p>
       </header>
-      <BoltController />
+      <RobotApp />
     </main>
   );
 }
