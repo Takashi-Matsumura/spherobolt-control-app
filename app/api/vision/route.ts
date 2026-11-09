@@ -1,0 +1,93 @@
+// カメラ画像を TypeSafe Jev に送り、「BOLT が写っているか」の確率を返す。
+// API キーはサーバ側（TYPESAFE_API_KEY）だけで扱い、ブラウザには渡さない。
+// 仕様: https://docs.typesafe.ai/api, https://docs.typesafe.ai/images.md, https://docs.typesafe.ai/primitives/noul.md
+
+const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+const MODEL = "jev-1.14.0";
+const TIMEOUT_MS = 5000;
+// 640×360 の JPEG を想定。余裕を見て 2MB（base64 で約 2.7MB）まで受け付ける
+const MAX_BASE64_LENGTH = 2_800_000;
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+export type VisionResult =
+  | { ok: true; visible: number; latencyMs: number; model: string }
+  | { ok: false; error: string };
+
+function fail(error: string, status: number) {
+  return Response.json({ ok: false, error } satisfies VisionResult, { status });
+}
+
+export async function POST(request: Request) {
+  // 他サイトのページからこの API を呼ばれて課金されないよう、同一オリジンからの呼び出しだけ受け付ける
+  const origin = request.headers.get("origin");
+  if (!origin || !URL.canParse(origin) || new URL(origin).host !== request.headers.get("host")) {
+    return fail("forbidden", 403);
+  }
+
+  const apiKey = process.env.TYPESAFE_API_KEY;
+  if (!apiKey) return fail("TYPESAFE_API_KEY が設定されていません（.env.local を確認してください）", 500);
+
+  let image: unknown;
+  try {
+    ({ image } = await request.json());
+  } catch {
+    return fail("リクエストが JSON ではありません", 400);
+  }
+  if (typeof image !== "string" || image.length > MAX_BASE64_LENGTH || !BASE64_RE.test(image)) {
+    return fail("image は data: 接頭辞なしの base64 文字列で送ってください", 400);
+  }
+
+  const assetKey = crypto.randomUUID();
+  const body = {
+    model: MODEL,
+    state: assetKey,
+    assets: { [assetKey]: { type: "image", format: "jpeg", data_base64: image } },
+    questions: {
+      visible: {
+        type: "noul",
+        instructions:
+          "Is a Sphero BOLT robot visible in this camera image? It is a small transparent spherical robot ball " +
+          "(about 7 cm) with visible electronics and glowing LEDs inside.",
+        criteria: {
+          true: "The robot ball is visible in the image, even if only partially or at the edge of the frame.",
+          false: "The robot ball is not in the image.",
+        },
+      },
+    },
+  };
+
+  const started = Date.now();
+  let res: Response;
+  try {
+    res = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "TypeSafe-Danger-Zone-Images": "true",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (e) {
+    return fail(`Jev に接続できません: ${(e as Error).message}`, 502);
+  }
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    // エラー本文に入力が含まれることがあるので短く切る
+    return fail(`Jev エラー ${res.status}: ${detail.slice(0, 300)}`, 502);
+  }
+
+  const json = (await res.json()) as { model?: string; answers?: { visible?: { noul?: unknown } } };
+  const visible = json.answers?.visible?.noul;
+  if (typeof visible !== "number" || !Number.isFinite(visible)) {
+    return fail("Jev の応答に判定が含まれていません", 502);
+  }
+  return Response.json({
+    ok: true,
+    visible,
+    latencyMs: Date.now() - started,
+    model: json.model ?? MODEL,
+  } satisfies VisionResult);
+}

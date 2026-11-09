@@ -1,12 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 // macOS の連係カメラでは、iPhone は「<名前>のカメラ」「iPhone Camera」などのラベルで見える
 const isIPhone = (d: MediaDeviceInfo) => /iphone/i.test(d.label);
 
-export default function CameraView() {
-  const videoRef = useRef<HTMLVideoElement>(null);
+type Props = {
+  /** 自動操縦がフレームを取り出せるように親が持つ */
+  videoRef: RefObject<HTMLVideoElement | null>;
+  onRunningChange: (running: boolean) => void;
+  /** 映像の上に重ねて表示するもの（自動操縦の状態など） */
+  overlay?: React.ReactNode;
+};
+
+export default function CameraView({ videoRef, onRunningChange, overlay }: Props) {
   const streamRef = useRef<MediaStream | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState("");
@@ -20,7 +27,7 @@ export default function CameraView() {
     if (videoRef.current) videoRef.current.srcObject = null;
     setRunning(false);
     setResolution("");
-  }, []);
+  }, [videoRef]);
 
   const listCameras = useCallback(async () => {
     const all = await navigator.mediaDevices.enumerateDevices();
@@ -76,8 +83,12 @@ export default function CameraView() {
         );
       }
     },
-    [listCameras, stop],
+    [listCameras, stop, videoRef],
   );
+
+  useEffect(() => {
+    onRunningChange(running);
+  }, [running, onRunningChange]);
 
   useEffect(() => {
     const onChange = () => void listCameras();
@@ -122,6 +133,7 @@ export default function CameraView() {
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
       <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-zinc-900">
         <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-contain" />
+        {running && overlay}
         {!running && (
           <p className="absolute inset-0 flex items-center justify-center text-sm text-zinc-400">
             カメラは停止中です

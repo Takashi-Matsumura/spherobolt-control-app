@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { type RefObject, useEffect, useState } from "react";
 import { Bolt } from "@/lib/bolt/bolt";
 
 type Status = "idle" | "connecting" | "connected";
@@ -28,8 +28,13 @@ function hexToRgb(hex: string): [number, number, number] {
   return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
 }
 
-export default function BoltController() {
-  const boltRef = useRef<Bolt | null>(null);
+type Props = {
+  /** 自動操縦など、他の部品からも同じ接続を使えるように親が持つ */
+  boltRef: RefObject<Bolt | null>;
+  onConnectedChange: (connected: boolean) => void;
+};
+
+export default function BoltController({ boltRef, onConnectedChange }: Props) {
   const [supported, setSupported] = useState<boolean | null>(null);
   const [status, setStatus] = useState<Status>("idle");
   const [logs, setLogs] = useState<string[]>([]);
@@ -48,7 +53,11 @@ export default function BoltController() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setSupported(Bolt.isSupported());
     return () => boltRef.current?.disconnect();
-  }, []);
+  }, [boltRef]);
+
+  useEffect(() => {
+    onConnectedChange(status === "connected");
+  }, [status, onConnectedChange]);
 
   const run = async (label: string, fn: (b: Bolt) => Promise<unknown>) => {
     const bolt = boltRef.current;
