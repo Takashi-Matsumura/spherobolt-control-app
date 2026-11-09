@@ -2,7 +2,18 @@
 
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import type { Bolt } from "@/lib/bolt/bolt";
-import type { VisionResult } from "./api/vision/route";
+import {
+  type Calibration,
+  type Point,
+  calibrate,
+  center,
+  headingFor,
+  imageAngle,
+  imageDistance,
+  isNearEdge,
+} from "@/lib/autopilot/geometry";
+import type { Box, VisionResult } from "./api/vision/route";
+import { ActionButton, GripHint, HandheldShell, Lcd, RepeatDpad } from "./handheld/controls";
 
 // 送る画像の大きさ。Jev の制限（各辺 280〜1568px）に収まり、通信量も小さい
 const FRAME_WIDTH = 640;
@@ -15,13 +26,31 @@ const WATCHDOG_MS = 1500;
 /** 走行中に向きを変える間隔 */
 const TURN_INTERVAL_MS = 2000;
 
-export type AutopilotState = "off" | "moving" | "stopped" | "waiting";
+/** 画面の端からこの割合以内に入ったら、中央へ引き返す */
+const EDGE_MARGIN = 0.2;
+/** 引き返しは、端からこの割合より内側に戻るまで続ける（行ったり来たりを防ぐ） */
+const RETURN_UNTIL_MARGIN = 0.35;
+/** Box の確信度がこれ未満なら、位置は当てにしない */
+const MIN_BOX_CONFIDENCE = 0.3;
+/** 向き合わせの 1 回の試走 */
+const CAL_PULSE_MS = 800;
+const CAL_MIN_SPEED = 35;
+/** 試走後、止まりきるまで待つ時間 */
+const CAL_SETTLE_MS = 400;
+/** 試走で映像の中を最低これだけ動かないと、方向を測れない（高さを 1 とした単位） */
+const CAL_MIN_DISTANCE = 0.05;
+/** 向き合わせに失敗したら、次に試すまで待つ時間 */
+const CAL_RETRY_MS = 3000;
+
+export type AutopilotState = "off" | "waiting" | "calibrating" | "moving" | "returning" | "stopped";
 
 export type AutopilotStatus = {
   state: AutopilotState;
   visible: number | null;
   latencyMs: number | null;
   reason: string;
+  box: Box | null;
+  edgeMargin: number;
 };
 
 type Props = {
@@ -29,8 +58,20 @@ type Props = {
   videoRef: RefObject<HTMLVideoElement | null>;
   connected: boolean;
   cameraRunning: boolean;
+  /** 自動操縦の画面が表示されているか */
+  active: boolean;
+  /** BOLT の向きの基準が変わるたびに増える番号。向き合わせの有効性の判定に使う */
+  headingEpoch: number;
   onStatus: (s: AutopilotStatus) => void;
+  /** 中央に置くカメラ映像 */
+  children: React.ReactNode;
 };
+
+type StoredCalibration = Calibration & { headingEpoch: number };
+
+type Judgment = { visible: number; box: Box | null; latencyMs: number };
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function captureFrame(video: HTMLVideoElement, canvas: HTMLCanvasElement): Promise<string> {
   canvas.width = FRAME_WIDTH;
@@ -47,55 +88,87 @@ async function captureFrame(video: HTMLVideoElement, canvas: HTMLCanvasElement):
   return dataUrl.slice(dataUrl.indexOf(",") + 1); // Jev は data: 接頭辞なしの base64 を受け取る
 }
 
-export default function Autopilot({ boltRef, videoRef, connected, cameraRunning, onStatus }: Props) {
+export default function Autopilot({
+  boltRef,
+  videoRef,
+  connected,
+  cameraRunning,
+  active,
+  headingEpoch,
+  onStatus,
+  children,
+}: Props) {
   const [enabled, setEnabled] = useState(false);
   const [speed, setSpeed] = useState(40);
   const [threshold, setThreshold] = useState(0.7);
   const [log, setLog] = useState<string[]>([]);
+  const [stored, setStored] = useState<StoredCalibration | null>(null);
+  // 向きの基準が変わる前に測った結果は使わない
+  const calibration = stored?.headingEpoch === headingEpoch ? stored : null;
 
-  // ループの中から最新の設定値を読むための参照
+  // ループの中から最新の値を読むための参照
   const speedRef = useRef(speed);
   const thresholdRef = useRef(threshold);
+  const calibrationRef = useRef<Calibration | null>(null);
+  const headingEpochRef = useRef(headingEpoch);
   useEffect(() => {
     speedRef.current = speed;
     thresholdRef.current = threshold;
-  }, [speed, threshold]);
+    calibrationRef.current = calibration;
+    headingEpochRef.current = headingEpoch;
+  }, [speed, threshold, calibration, headingEpoch]);
+
+  const saveCalibration = useCallback((c: Calibration | null) => {
+    const value = c && { ...c, headingEpoch: headingEpochRef.current };
+    calibrationRef.current = value;
+    setStored(value);
+  }, []);
 
   const addLog = useCallback((msg: string) => {
     const t = new Date().toLocaleTimeString(undefined, { hour12: false });
     setLog((prev) => [`${t} ${msg}`, ...prev].slice(0, 50));
   }, []);
 
-  const ready = connected && cameraRunning;
+  const ready = connected && cameraRunning && active;
 
   // 準備が崩れたら（切断・カメラ停止）自動操縦を解除する
   useEffect(() => {
     if (!ready && enabled) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setEnabled(false);
-      addLog("BOLT かカメラが止まったので自動操縦を解除しました");
+      addLog(active ? "BOLT かカメラが止まったので自動操縦を解除しました" : "画面を切り替えたので自動操縦を解除しました");
     }
-  }, [ready, enabled, addLog]);
+  }, [ready, enabled, active, addLog]);
 
   useEffect(() => {
     if (!enabled) {
-      onStatus({ state: "off", visible: null, latencyMs: null, reason: "" });
+      onStatus({ state: "off", visible: null, latencyMs: null, reason: "", box: null, edgeMargin: EDGE_MARGIN });
       return;
     }
 
     let cancelled = false;
     let moving = false;
+    let returning = false;
     let heading = 0;
     let lastSeen = 0;
     let lastTurn = 0;
     let lastStopSent = 0;
-    let visible: number | null = null;
+    let calFailedAt = 0;
+    let last: Judgment | null = null;
     // 接続し直すと中身が変わるので、使うたびに最新の接続を読む
     const getBolt = () => boltRef.current;
-    let latencyMs: number | null = null;
     const canvas = document.createElement("canvas");
+    const aspect = FRAME_WIDTH / FRAME_HEIGHT;
 
-    const report = (state: AutopilotState, reason: string) => onStatus({ state, visible, latencyMs, reason });
+    const report = (state: AutopilotState, reason: string) =>
+      onStatus({
+        state,
+        visible: last?.visible ?? null,
+        latencyMs: last?.latencyMs ?? null,
+        reason,
+        box: last?.box ?? null,
+        edgeMargin: EDGE_MARGIN,
+      });
 
     const stop = (reason: string) => {
       const now = Date.now();
@@ -108,21 +181,16 @@ export default function Autopilot({ boltRef, videoRef, connected, cameraRunning,
           .catch((e) => addLog(`停止コマンド失敗: ${(e as Error).message}`));
       }
       moving = false;
+      returning = false;
       report("stopped", reason);
     };
 
-    const move = () => {
-      const now = Date.now();
-      if (!moving || now - lastTurn > TURN_INTERVAL_MS) {
-        heading = Math.floor(Math.random() * 360);
-        lastTurn = now;
-        if (!moving) addLog(`走行開始（向き ${heading}°）`);
-        moving = true;
-        getBolt()
-          ?.roll(speedRef.current, heading)
-          .catch((e) => stop(`走行コマンド失敗: ${(e as Error).message}`));
-      }
-      report("moving", "BOLT が見えています");
+    const roll = (h: number) => {
+      heading = h;
+      moving = true;
+      getBolt()
+        ?.roll(speedRef.current, h)
+        .catch((e) => stop(`走行コマンド失敗: ${(e as Error).message}`));
     };
 
     // 見張りタイマー: 判定が途絶えたら止める（通信が遅れても走り続けないように）
@@ -130,38 +198,140 @@ export default function Autopilot({ boltRef, videoRef, connected, cameraRunning,
       if (moving && Date.now() - lastSeen > WATCHDOG_MS) stop(`判定が ${WATCHDOG_MS / 1000} 秒以上届いていません`);
     }, 100);
 
+    const judge = async (): Promise<Judgment> => {
+      const video = videoRef.current;
+      if (!video || video.readyState < 2) throw new Error("カメラ映像がありません");
+      const image = await captureFrame(video, canvas);
+      const res = await fetch("/api/vision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image }),
+      });
+      const result = (await res.json()) as VisionResult;
+      if (!result.ok) throw new Error(result.error);
+      last = { visible: result.visible, box: result.box, latencyMs: result.latencyMs };
+      return last;
+    };
+
+    /** 見えていて、位置も当てになるときだけ中心を返す */
+    const positionOf = (j: Judgment): Point | null => {
+      if (j.visible < thresholdRef.current || !j.box) return null;
+      if (j.box.confidence !== null && j.box.confidence < MIN_BOX_CONFIDENCE) return null;
+      return center(j.box);
+    };
+
+    /** 決まった時間だけ走って止まり、止まった後の位置を測る */
+    const pulseAndMeasure = async (h: number): Promise<Point> => {
+      const bolt = getBolt();
+      if (!bolt) throw new Error("BOLT が接続されていません");
+      await bolt.roll(Math.max(speedRef.current, CAL_MIN_SPEED), h);
+      await sleep(CAL_PULSE_MS);
+      await bolt.stop(h);
+      await sleep(CAL_SETTLE_MS);
+      if (cancelled) throw new Error("中断しました");
+      const p = positionOf(await judge());
+      if (!p) throw new Error("試走のあと BOLT を見失いました");
+      return p;
+    };
+
+    /**
+     * 向き合わせ: heading 0° と 90° で少しずつ走らせ、映像の中でどちらへ動いたかを測る。
+     * 毎回、逆向きに同じだけ走って元の位置へ戻す。
+     */
+    const runCalibration = async (start: Point) => {
+      report("calibrating", "向き合わせ中: 0° に試走");
+      addLog("向き合わせを開始");
+      const p0 = await pulseAndMeasure(0);
+      const d0 = imageDistance(start, p0, aspect);
+      if (d0 < CAL_MIN_DISTANCE) throw new Error(`動きが小さすぎて方向を測れません（${d0.toFixed(2)}）`);
+      const theta0 = imageAngle(start, p0, aspect);
+
+      report("calibrating", "向き合わせ中: 元の位置へ戻る");
+      const back = await pulseAndMeasure(180);
+
+      report("calibrating", "向き合わせ中: 90° に試走");
+      const p90 = await pulseAndMeasure(90);
+      const d90 = imageDistance(back, p90, aspect);
+      if (d90 < CAL_MIN_DISTANCE) throw new Error(`動きが小さすぎて方向を測れません（${d90.toFixed(2)}）`);
+      const theta90 = imageAngle(back, p90, aspect);
+
+      report("calibrating", "向き合わせ中: 元の位置へ戻る");
+      await pulseAndMeasure(270);
+
+      const cal = calibrate(theta0, theta90);
+      saveCalibration(cal);
+      addLog(
+        `向き合わせ完了: 0° は映像の ${Math.round(theta0)}° 方向、` +
+          `${cal.sign === 1 ? "時計回り" : "反時計回り"}（誤差 ${Math.round(cal.error)}°）`,
+      );
+      if (cal.error > 45) addLog("注意: 誤差が大きいので、引き返しの方向がずれる可能性があります");
+    };
+
+    const drive = (p: Point) => {
+      const cal = calibrationRef.current!;
+      const now = Date.now();
+      if (returning && !isNearEdge(p, RETURN_UNTIL_MARGIN)) {
+        returning = false;
+        addLog("中央付近に戻りました");
+      } else if (!returning && isNearEdge(p, EDGE_MARGIN)) {
+        returning = true;
+        addLog("画面の端に近づいたので中央へ引き返します");
+      }
+
+      if (returning) {
+        // 判定のたびに、現在地から中央への方向に向け直す
+        roll(headingFor(imageAngle(p, { x: 0.5, y: 0.5 }, aspect), cal));
+        report("returning", "画面の端に近いので中央へ戻っています");
+        return;
+      }
+      if (!moving || now - lastTurn > TURN_INTERVAL_MS) {
+        lastTurn = now;
+        if (!moving) addLog("走行開始");
+        roll(Math.floor(Math.random() * 360));
+      }
+      report("moving", "BOLT が見えています");
+    };
+
     const loop = async () => {
       report("waiting", "最初の判定を待っています");
       while (!cancelled) {
         const started = Date.now();
-        const video = videoRef.current;
         try {
-          if (!video || video.readyState < 2) throw new Error("カメラ映像がありません");
-          const image = await captureFrame(video, canvas);
-          const res = await fetch("/api/vision", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ image }),
-          });
-          const result = (await res.json()) as VisionResult;
+          const j = await judge();
           if (cancelled) break;
-          if (!result.ok) throw new Error(result.error);
-
-          visible = result.visible;
-          latencyMs = result.latencyMs;
-          if (result.visible >= thresholdRef.current) {
-            lastSeen = Date.now();
-            move();
+          const p = positionOf(j);
+          if (!p) {
+            stop(
+              j.visible < thresholdRef.current
+                ? `BOLT が見えません（確率 ${(j.visible * 100).toFixed(0)}%）`
+                : "BOLT の位置が分かりません",
+            );
+          } else if (!calibrationRef.current) {
+            if (Date.now() - calFailedAt > CAL_RETRY_MS) {
+              stop("向き合わせの準備");
+              try {
+                await runCalibration(p);
+              } catch (e) {
+                calFailedAt = Date.now();
+                if (cancelled) break;
+                getBolt()
+                  ?.stop(heading)
+                  .catch(() => {});
+                addLog(`向き合わせ失敗: ${(e as Error).message}`);
+                report("stopped", `向き合わせ失敗: ${(e as Error).message}`);
+              }
+            }
           } else {
-            stop(`BOLT が見えません（確率 ${(result.visible * 100).toFixed(0)}%）`);
+            lastSeen = Date.now();
+            drive(p);
           }
         } catch (e) {
           if (cancelled) break;
           stop(`判定エラー: ${(e as Error).message}`);
-          await new Promise((r) => setTimeout(r, 1000)); // エラー時は少し待ってから再試行
+          await sleep(1000); // エラー時は少し待ってから再試行
         }
         const wait = MIN_INTERVAL_MS - (Date.now() - started);
-        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        if (wait > 0) await sleep(wait);
       }
     };
     void loop();
@@ -173,56 +343,142 @@ export default function Autopilot({ boltRef, videoRef, connected, cameraRunning,
         ?.stop(heading)
         .catch(() => {});
     };
-  }, [enabled, boltRef, videoRef, onStatus, addLog]);
+  }, [enabled, boltRef, videoRef, onStatus, addLog, saveCalibration]);
+
+  const SPEED_MIN = 10;
+  const SPEED_MAX = 100;
+  const adjustSpeed = useCallback(
+    (d: number) => setSpeed((v) => Math.min(SPEED_MAX, Math.max(SPEED_MIN, v + d))),
+    [],
+  );
+  // 0.05 刻みの小数は誤差が溜まるので、100 倍した整数で計算する
+  const adjustThreshold = useCallback(
+    (d: number) => setThreshold((v) => Math.min(95, Math.max(50, Math.round(v * 100) + d)) / 100),
+    [],
+  );
+
+  const toggle = useCallback(() => {
+    addLog(enabled ? "自動操縦を解除" : "自動操縦を開始");
+    setEnabled(!enabled);
+  }, [enabled, addLog]);
+
+  // キーボード: 矢印キー = 十字キー、Esc = 自動操縦を止める（自動操縦の画面が表示されている間だけ）
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest("input, select, textarea")) return;
+      const map: Record<string, () => void> = {
+        ArrowUp: () => adjustSpeed(5),
+        ArrowDown: () => adjustSpeed(-5),
+        ArrowRight: () => adjustThreshold(5),
+        ArrowLeft: () => adjustThreshold(-5),
+        Escape: () => {
+          if (enabled) addLog("Esc キーで自動操縦を解除");
+          setEnabled(false);
+        },
+      };
+      const fn = map[e.key];
+      if (fn) {
+        e.preventDefault();
+        fn();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, enabled, addLog, adjustSpeed, adjustThreshold]);
 
   return (
-    <section className="flex flex-col gap-3 rounded-lg border border-zinc-300 p-4 dark:border-zinc-700">
-      <h2 className="font-semibold">自動操縦（Jev）</h2>
-      <p className="text-sm text-zinc-500">
-        カメラに BOLT が写っている間だけ、ランダムな向きに走ります。見えなくなったら止まります。
-      </p>
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          className={enabled ? "btn" : "btn btn-primary"}
-          disabled={!ready}
-          onClick={() => {
-            setEnabled((v) => !v);
-            addLog(enabled ? "自動操縦を解除" : "自動操縦を開始");
-          }}
-        >
-          {enabled ? "自動操縦を止める" : "自動操縦を開始"}
-        </button>
-        {!ready && <span className="text-sm text-zinc-500">BOLT への接続とカメラの開始が必要です</span>}
-      </div>
-      <label className="flex items-center gap-3 text-sm">
-        速度 {speed}
-        <input
-          type="range"
-          min={10}
-          max={100}
-          value={speed}
-          onChange={(e) => setSpeed(Number(e.target.value))}
-          className="flex-1"
-        />
-      </label>
-      <label className="flex items-center gap-3 text-sm">
-        「見えている」とみなす確率 {(threshold * 100).toFixed(0)}%
-        <input
-          type="range"
-          min={0.5}
-          max={0.95}
-          step={0.05}
-          value={threshold}
-          onChange={(e) => setThreshold(Number(e.target.value))}
-          className="flex-1"
-        />
-      </label>
-      <p className="text-xs text-zinc-500">
-        判定の遅れの分だけ進んでしまうため、速度は低めにしてください。止まる側に倒す設計で、通信エラーや判定の途絶でも停止します。
-      </p>
-      <pre className="h-32 overflow-auto rounded-lg bg-zinc-100 p-3 text-xs dark:bg-zinc-900">
-        {log.join("\n") || "（まだありません）"}
-      </pre>
-    </section>
+    <div className="flex flex-col gap-4">
+      {/* 本体 */}
+      <HandheldShell
+        power={enabled}
+        screenLabel="BOLT PILOT · JEV VISION"
+        left={
+          <>
+            <Lcd>
+              <div className="flex justify-between">
+                <span>AUTO</span>
+                <span className={enabled ? "text-emerald-300" : "text-zinc-500"}>{enabled ? "ON" : "OFF"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>CAL</span>
+                <span className={calibration ? "text-emerald-300" : "text-amber-300"}>
+                  {calibration ? `±${Math.round(calibration.error)}°` : "----"}
+                </span>
+              </div>
+            </Lcd>
+            <div className="flex items-end gap-5">
+              <div className="translate-y-4">
+                <ActionButton
+                  letter="B"
+                  label="向き合わせ やり直し"
+                  tone="secondary"
+                  disabled={!calibration}
+                  onClick={() => {
+                    saveCalibration(null);
+                    addLog("向き合わせをリセットしました（次に見えたときにやり直します）");
+                  }}
+                />
+              </div>
+              <ActionButton
+                letter="A"
+                label={enabled ? "自動操縦を止める" : "自動操縦を開始"}
+                tone="primary"
+                disabled={!ready && !enabled}
+                title={!ready ? "BOLT への接続とカメラの開始が必要です" : undefined}
+                onClick={toggle}
+              />
+            </div>
+            <GripHint>{!ready ? "BOLT への接続とカメラの開始が必要です" : "Esc キーでも止められます"}</GripHint>
+          </>
+        }
+        right={
+          <>
+            <Lcd>
+              <div className="flex justify-between">
+                <span>▲▼ SPEED</span>
+                <span>{speed}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>◀▶ SEE</span>
+                <span>{(threshold * 100).toFixed(0)}%</span>
+              </div>
+            </Lcd>
+            <RepeatDpad
+              onUp={() => adjustSpeed(5)}
+              onDown={() => adjustSpeed(-5)}
+              onRight={() => adjustThreshold(5)}
+              onLeft={() => adjustThreshold(-5)}
+              labels={{
+                up: "速度を上げる",
+                down: "速度を下げる",
+                right: "「見えている」とみなす確率を上げる",
+                left: "「見えている」とみなす確率を下げる",
+              }}
+            />
+            <GripHint>
+              ▲▼ 速度（低めがおすすめ）
+              <br />
+              ◀▶「見えている」とみなす確率
+            </GripHint>
+          </>
+        }
+      >
+        {children}
+      </HandheldShell>
+
+      {/* 本体の下: ログと説明 */}
+      <details className="rounded-lg border border-zinc-300 p-3 dark:border-zinc-700" open>
+        <summary className="cursor-pointer text-sm font-semibold">自動操縦のログ</summary>
+        <p className="mt-2 text-xs text-zinc-500">
+          BOLT が写っている間だけランダムに走り、画面の端（点線）に近づくと中央へ引き返します。見えなくなったとき、
+          エラーや判定の途絶でも止まります。最初に少しずつ走らせて、映像の中の方向と BOLT の向きを対応づけます（向き合わせ）。
+        </p>
+        <pre className="mt-2 h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-zinc-100 p-2 text-xs dark:bg-zinc-900">
+          {log.join("\n") || "（まだありません）"}
+        </pre>
+      </details>
+    </div>
   );
 }

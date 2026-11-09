@@ -99,22 +99,35 @@ export default function CameraView({ videoRef, onRunningChange, overlay }: Props
     };
   }, [listCameras, stop]);
 
+  const pill =
+    "rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-200 shadow-[inset_0_-2px_0_rgb(0_0_0/0.4)] " +
+    "hover:bg-zinc-700 active:translate-y-px disabled:opacity-40";
+
   return (
-    <section className="flex flex-col gap-3">
-      <h2 className="font-semibold">目（カメラ）</h2>
-      <div className="flex flex-wrap items-center gap-3">
-        {running ? (
-          <button className="btn" onClick={stop}>
-            カメラを止める
-          </button>
-        ) : (
-          <button className="btn btn-primary" onClick={() => start(deviceId || undefined)}>
-            カメラを開始
-          </button>
+    <section className="flex flex-col gap-2">
+      {/* 画面 */}
+      <div className="relative aspect-video w-full overflow-hidden rounded-md bg-black">
+        <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-contain" />
+        {running && overlay}
+        {!running && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center text-zinc-400">
+            <p className="text-sm">カメラは停止中です</p>
+            <p className="max-w-md text-xs text-zinc-500">
+              下の「カメラ」を押すと、iPhone が見つかれば自動で選びます。iPhone のロックを解除し、Mac と同じ Apple
+              アカウントでサインインしておいてください（macOS の連係カメラ）。
+            </p>
+          </div>
         )}
+      </div>
+      {/* 画面の下の小さなボタン列 */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button className={pill} onClick={running ? stop : () => start(deviceId || undefined)}>
+          <span className={`mr-1.5 inline-block h-2 w-2 rounded-full ${running ? "bg-red-500" : "bg-zinc-500"}`} />
+          {running ? "カメラを止める" : "カメラ"}
+        </button>
         {devices.length > 0 && (
           <select
-            className="btn"
+            className={`${pill} max-w-[14rem] truncate`}
             value={deviceId}
             onChange={(e) => {
               setDeviceId(e.target.value);
@@ -128,22 +141,9 @@ export default function CameraView({ videoRef, onRunningChange, overlay }: Props
             ))}
           </select>
         )}
-        {resolution && <span className="text-sm text-zinc-500">{resolution}</span>}
+        {resolution && <span className="font-mono text-xs text-zinc-500">{resolution}</span>}
       </div>
-      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-      <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-zinc-900">
-        <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-contain" />
-        {running && overlay}
-        {!running && (
-          <p className="absolute inset-0 flex items-center justify-center text-sm text-zinc-400">
-            カメラは停止中です
-          </p>
-        )}
-      </div>
-      <p className="text-xs text-zinc-500">
-        iPhone が見つかれば自動で選びます。macOS の連係カメラを使うため、iPhone のロックを解除し、Mac と同じ Apple
-        アカウントでサインインしておいてください。
-      </p>
+      {error && <p className="text-xs text-red-400">{error}</p>}
     </section>
   );
 }
