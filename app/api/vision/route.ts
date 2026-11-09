@@ -8,6 +8,41 @@ const TIMEOUT_MS = 5000;
 // 640×360 の JPEG を想定。余裕を見て 2MB（base64 で約 2.7MB）まで受け付ける
 const MAX_BASE64_LENGTH = 2_800_000;
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+const MAX_BODY_BYTES = MAX_BASE64_LENGTH + 1024;
+
+// 料金の上限として、プロセス全体で 1 秒あたりの呼び出し回数を制限する。
+// 自動操縦は最大でも約 3 回/秒なので、通常の利用では超えない。
+const RATE_LIMIT_PER_SEC = 5;
+const recentCalls: number[] = [];
+
+function rateLimited(): boolean {
+  const now = Date.now();
+  while (recentCalls.length && now - recentCalls[0] > 1000) recentCalls.shift();
+  if (recentCalls.length >= RATE_LIMIT_PER_SEC) return true;
+  recentCalls.push(now);
+  return false;
+}
+
+/** 上限を超えた時点で読むのをやめる（巨大なボディを全部メモリに載せない） */
+async function readBodyLimited(request: Request, limit: number): Promise<string | null> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) return null;
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
 
 export type VisionResult =
   | { ok: true; visible: number; latencyMs: number; model: string }
@@ -18,7 +53,9 @@ function fail(error: string, status: number) {
 }
 
 export async function POST(request: Request) {
-  // 他サイトのページからこの API を呼ばれて課金されないよう、同一オリジンからの呼び出しだけ受け付ける
+  // 他サイトのページ（ブラウザ）からこの API を呼ばれて課金されないよう、同一オリジンからの呼び出しだけ受け付ける。
+  // ただし Origin / Host は curl などでは偽装できるため、認証の代わりにはならない。
+  // ローカル利用が前提で、外部に公開する場合は認証を追加すること（README 参照）。
   const origin = request.headers.get("origin");
   if (!origin || !URL.canParse(origin) || new URL(origin).host !== request.headers.get("host")) {
     return fail("forbidden", 403);
@@ -27,9 +64,14 @@ export async function POST(request: Request) {
   const apiKey = process.env.TYPESAFE_API_KEY;
   if (!apiKey) return fail("TYPESAFE_API_KEY が設定されていません（.env.local を確認してください）", 500);
 
+  if (rateLimited()) return fail("呼び出しが多すぎます", 429);
+
+  const text = await readBodyLimited(request, MAX_BODY_BYTES);
+  if (text === null) return fail("リクエストが大きすぎます", 413);
+
   let image: unknown;
   try {
-    ({ image } = await request.json());
+    ({ image } = JSON.parse(text));
   } catch {
     return fail("リクエストが JSON ではありません", 400);
   }
