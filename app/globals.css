@@ -34,4 +34,21 @@ body {
   .btn-primary {
     @apply border-transparent bg-blue-600 text-white hover:bg-blue-700 dark:hover:bg-blue-500;
   }
+
+  /*
+   * 接続中のゲーム機本体。ヘアライン（細い横筋）と斜めの光沢で金属っぽく見せる。
+   * 未接続の本体と見分けやすいよう、ライトモードはガンメタ、ダークモードはアルミにする。
+   */
+  .shell-metal {
+    background-image:
+      repeating-linear-gradient(0deg, rgb(255 255 255 / 0.035) 0 1px, transparent 1px 3px),
+      linear-gradient(135deg, #6b737e 0%, #3a4049 38%, #5a626d 55%, #2b3037 100%);
+  }
+  @media (prefers-color-scheme: dark) {
+    .shell-metal {
+      background-image:
+        repeating-linear-gradient(0deg, rgb(0 0 0 / 0.04) 0 1px, transparent 1px 3px),
+        linear-gradient(135deg, #f1f3f5 0%, #c3c8ce 38%, #e4e7ea 55%, #a9afb6 100%);
+    }
+  }
 }

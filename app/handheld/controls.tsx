@@ -263,14 +263,23 @@ type ShellProps = {
   screenLabel: string;
   /** POWER ランプを点けるか */
   power: boolean;
+  /** BOLT に接続中か。接続中は本体色を変えて、接続忘れに気づけるようにする */
+  connected: boolean;
 };
 
 /** 携帯ゲーム機風の本体: 左グリップ・画面・右グリップ */
-export function HandheldShell({ left, right, children, screenLabel, power }: ShellProps) {
+export function HandheldShell({ left, right, children, screenLabel, power, connected }: ShellProps) {
   // 大きい画面では左右のグリップを画面と同じ高さに伸ばし、液晶を上端・スピーカーを下端に揃える
   const grip = "flex flex-col items-center gap-5 lg:self-stretch lg:justify-between lg:py-6";
   return (
-    <div className="rounded-[2.5rem] bg-gradient-to-b from-zinc-200 to-zinc-300 p-5 shadow-[0_20px_40px_-20px_rgb(0_0_0/0.5),inset_0_2px_0_rgb(255_255_255/0.6)] ring-1 ring-black/10 lg:p-7 dark:from-zinc-700 dark:to-zinc-800 dark:shadow-[0_20px_40px_-20px_rgb(0_0_0/0.9),inset_0_1px_0_rgb(255_255_255/0.08)]">
+    <div
+      data-connected={connected}
+      className={`rounded-[2.5rem] p-5 shadow-[0_20px_40px_-20px_rgb(0_0_0/0.5),inset_0_2px_0_rgb(255_255_255/0.6)] ring-1 ring-black/10 lg:p-7 dark:shadow-[0_20px_40px_-20px_rgb(0_0_0/0.9),inset_0_1px_0_rgb(255_255_255/0.08)] ${
+        connected
+          ? "shell-metal"
+          : "bg-gradient-to-b from-zinc-200 to-zinc-300 dark:from-zinc-700 dark:to-zinc-800"
+      }`}
+    >
       <div className="grid items-center gap-6 lg:grid-cols-[12rem_minmax(0,1fr)_12rem]">
         <div className={`${grip} order-2 lg:order-1`}>
           {left}
