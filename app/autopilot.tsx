@@ -14,7 +14,7 @@ import {
 } from "@/lib/autopilot/geometry";
 import { type Segment, predictCenter, segmentFor, updateGain } from "@/lib/autopilot/tracker";
 import type { Box, VisionResult } from "./api/vision/route";
-import { ActionButton, GripHint, HandheldShell, Lcd, RepeatDpad } from "./handheld/controls";
+import { ActionButton, ChevronIcon, HandheldShell, Lcd, RepeatDpad } from "./handheld/controls";
 
 // 送る画像の大きさ。Jev の制限（各辺 280〜1568px）に収まり、通信量も小さい
 const FRAME_WIDTH = 640;
@@ -461,6 +461,7 @@ export default function Autopilot({
                 <ActionButton
                   letter="B"
                   label="向き合わせ やり直し"
+                  tip={calibration ? "向き合わせをやり直す\n（次に見えたときに測り直します）" : "向き合わせ やり直し\n（まだ向き合わせていません）"}
                   tone="secondary"
                   disabled={!calibration}
                   onClick={() => {
@@ -474,22 +475,39 @@ export default function Autopilot({
                 label={enabled ? "自動操縦を止める" : "自動操縦を開始"}
                 tone="primary"
                 disabled={!ready && !enabled}
-                title={!ready ? "BOLT への接続とカメラの開始が必要です" : undefined}
+                tip={
+                  enabled
+                    ? "自動操縦を止める（Esc キーでも止められます）"
+                    : ready
+                      ? "自動操縦を開始"
+                      : "自動操縦を開始\nBOLT への接続とカメラの開始が必要です"
+                }
                 onClick={toggle}
               />
             </div>
-            <GripHint>{!ready ? "BOLT への接続とカメラの開始が必要です" : "Esc キーでも止められます"}</GripHint>
           </>
         }
         right={
           <>
             <Lcd>
               <div className="flex justify-between">
-                <span>▲▼ SPEED</span>
+                <span className="flex items-center gap-1.5">
+                  <span className="flex" aria-hidden>
+                    <ChevronIcon dir="up" className="h-3.5 w-3.5" />
+                    <ChevronIcon dir="down" className="h-3.5 w-3.5" />
+                  </span>
+                  SPEED
+                </span>
                 <span>{speed}</span>
               </div>
               <div className="flex justify-between">
-                <span>◀▶ SEE</span>
+                <span className="flex items-center gap-1.5">
+                  <span className="flex" aria-hidden>
+                    <ChevronIcon dir="left" className="h-3.5 w-3.5" />
+                    <ChevronIcon dir="right" className="h-3.5 w-3.5" />
+                  </span>
+                  CONF
+                </span>
                 <span>{(threshold * 100).toFixed(0)}%</span>
               </div>
             </Lcd>
@@ -499,17 +517,12 @@ export default function Autopilot({
               onRight={() => adjustThreshold(5)}
               onLeft={() => adjustThreshold(-5)}
               labels={{
-                up: "速度を上げる",
-                down: "速度を下げる",
+                up: "速度を上げる（低めがおすすめ）",
+                down: "速度を下げる（低めがおすすめ）",
                 right: "「見えている」とみなす確率を上げる",
                 left: "「見えている」とみなす確率を下げる",
               }}
             />
-            <GripHint>
-              ▲▼ 速度（低めがおすすめ）
-              <br />
-              ◀▶「見えている」とみなす確率
-            </GripHint>
           </>
         }
       >

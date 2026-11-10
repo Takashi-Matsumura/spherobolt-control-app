@@ -53,18 +53,88 @@ export function holdHandlers(onPress: () => void, onRelease: () => void): PressH
   };
 }
 
+/** マウスを乗せたとき（キーボードでフォーカスしたとき）に出る小さな説明 */
+export function Tip({
+  text,
+  children,
+  className = "relative inline-flex",
+}: {
+  text?: React.ReactNode;
+  children: React.ReactNode;
+  /** 位置決めのクラス（既定は relative） */
+  className?: string;
+}) {
+  return (
+    <span className={`group/tip ${className}`}>
+      {children}
+      {text && (
+        <span
+          role="tooltip"
+          className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-max max-w-[16rem] -translate-x-1/2 whitespace-pre-line rounded-md bg-zinc-950 px-2.5 py-1.5 text-left text-[11px] font-normal leading-snug tracking-normal text-zinc-100 opacity-0 shadow-lg ring-1 ring-white/10 transition-opacity group-focus-within/tip:opacity-100 group-hover/tip:opacity-100 group-hover/tip:delay-150"
+        >
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** 十字キーの矢印（上向きを回して使う） */
+export function ChevronIcon({ dir, className = "h-5 w-5" }: { dir: Dir; className?: string }) {
+  const rotate = { up: 0, right: 90, down: 180, left: 270 }[dir];
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ transform: `rotate(${rotate}deg)` }}
+      aria-hidden
+    >
+      <path d="m6 15 6-6 6 6" />
+    </svg>
+  );
+}
+
+/** 電源アイコン */
+export function PowerIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 2v10" />
+      <path d="M18.4 6.6a9 9 0 1 1-12.77.04" />
+    </svg>
+  );
+}
+
 const arm =
-  "absolute flex items-center justify-center bg-zinc-800 text-zinc-300 shadow-[inset_0_-3px_0_rgb(0_0_0/0.35)] " +
+  "flex h-full w-full items-center justify-center bg-zinc-800 text-zinc-300 shadow-[inset_0_-3px_0_rgb(0_0_0/0.35)] " +
   "active:translate-y-px active:shadow-none active:bg-zinc-900 select-none touch-none dark:bg-zinc-950 " +
   "disabled:opacity-40 disabled:cursor-not-allowed";
 
 const ARM_POS: Record<Dir, string> = {
-  up: "left-[var(--s)] top-0 rounded-t-md",
-  down: "bottom-0 left-[var(--s)] rounded-b-md",
-  left: "left-0 top-[var(--s)] rounded-l-md",
-  right: "right-0 top-[var(--s)] rounded-r-md",
+  up: "left-[var(--s)] top-0",
+  down: "bottom-0 left-[var(--s)]",
+  left: "left-0 top-[var(--s)]",
+  right: "right-0 top-[var(--s)]",
 };
-const ARM_ICON: Record<Dir, string> = { up: "▲", down: "▼", left: "◀", right: "▶" };
+const ARM_ROUND: Record<Dir, string> = {
+  up: "rounded-t-md",
+  down: "rounded-b-md",
+  left: "rounded-l-md",
+  right: "rounded-r-md",
+};
 
 type DpadProps = {
   /** 方向ごとのイベント（押しっぱなしで繰り返す設定用など） */
@@ -84,28 +154,29 @@ export function Dpad({ handlers, onPress, onRelease, labels, onCenter, centerLab
   return (
     <div className="relative h-[7.8rem] w-[7.8rem]" style={{ ["--s" as string]: "2.6rem" }}>
       {(Object.keys(ARM_POS) as Dir[]).map((d) => (
-        <button
-          key={d}
-          aria-label={labels[d]}
-          title={labels[d]}
-          disabled={disabled}
-          {...(handlers?.[d] ??
-            (onPress && onRelease ? holdHandlers(() => onPress(d), () => onRelease(d)) : {}))}
-          className={`${arm} ${ARM_POS[d]} h-[var(--s)] w-[var(--s)]`}
-        >
-          {ARM_ICON[d]}
-        </button>
+        <Tip key={d} text={labels[d]} className={`absolute flex h-[var(--s)] w-[var(--s)] ${ARM_POS[d]}`}>
+          <button
+            aria-label={labels[d]}
+            disabled={disabled}
+            {...(handlers?.[d] ??
+              (onPress && onRelease ? holdHandlers(() => onPress(d), () => onRelease(d)) : {}))}
+            className={`${arm} ${ARM_ROUND[d]}`}
+          >
+            <ChevronIcon dir={d} />
+          </button>
+        </Tip>
       ))}
       {onCenter ? (
-        <button
-          aria-label={centerLabel}
-          title={centerLabel}
-          disabled={disabled}
-          onClick={onCenter}
-          className="absolute left-[var(--s)] top-[var(--s)] flex h-[var(--s)] w-[var(--s)] items-center justify-center bg-zinc-800 disabled:opacity-40 dark:bg-zinc-950"
-        >
-          <span className="h-5 w-5 rounded-full bg-red-700 shadow-[inset_0_-2px_0_rgb(0_0_0/0.4)] active:translate-y-px" />
-        </button>
+        <Tip text={centerLabel} className="absolute left-[var(--s)] top-[var(--s)] flex h-[var(--s)] w-[var(--s)]">
+          <button
+            aria-label={centerLabel}
+            disabled={disabled}
+            onClick={onCenter}
+            className="flex h-full w-full items-center justify-center bg-zinc-800 disabled:opacity-40 dark:bg-zinc-950"
+          >
+            <span className="h-5 w-5 rounded-full bg-red-700 shadow-[inset_0_-2px_0_rgb(0_0_0/0.4)] active:translate-y-px" />
+          </button>
+        </Tip>
       ) : (
         <div className="absolute left-[var(--s)] top-[var(--s)] flex h-[var(--s)] w-[var(--s)] items-center justify-center bg-zinc-800 dark:bg-zinc-950">
           <span className="h-4 w-4 rounded-full bg-zinc-700 dark:bg-zinc-900" />
@@ -138,30 +209,28 @@ type ActionButtonProps = {
   onClick: () => void;
   disabled?: boolean;
   tone: "primary" | "secondary";
-  /** 押せない理由など */
-  title?: string;
+  /** マウスを乗せたときの説明（省略時は label） */
+  tip?: React.ReactNode;
   size?: "md" | "sm";
 };
 
 /** 丸い押しボタン（A / B） */
-export function ActionButton({ letter, label, onClick, disabled, tone, title, size = "md" }: ActionButtonProps) {
+export function ActionButton({ letter, label, onClick, disabled, tone, tip, size = "md" }: ActionButtonProps) {
   const color =
     tone === "primary"
       ? "bg-amber-500 text-amber-950 shadow-[inset_0_-4px_0_rgb(0_0_0/0.25)]"
       : "bg-zinc-700 text-zinc-100 shadow-[inset_0_-4px_0_rgb(0_0_0/0.35)] dark:bg-zinc-600";
   return (
-    <div className="flex flex-col items-center gap-1.5">
+    <Tip text={tip ?? label}>
       <button
         onClick={onClick}
         disabled={disabled}
-        title={title ?? label}
         aria-label={label}
         className={`flex ${size === "md" ? "h-14 w-14 text-lg" : "h-11 w-11 text-base"} select-none items-center justify-center rounded-full font-bold ${color} active:translate-y-px active:shadow-none disabled:cursor-not-allowed disabled:opacity-40`}
       >
         {letter}
       </button>
-      <span className="text-center text-[11px] font-medium leading-tight text-zinc-600 dark:text-zinc-400">{label}</span>
-    </div>
+    </Tip>
   );
 }
 
@@ -198,7 +267,8 @@ type ShellProps = {
 
 /** 携帯ゲーム機風の本体: 左グリップ・画面・右グリップ */
 export function HandheldShell({ left, right, children, screenLabel, power }: ShellProps) {
-  const grip = "flex flex-col items-center gap-5";
+  // 大きい画面では左右のグリップを画面と同じ高さに伸ばし、液晶を上端・スピーカーを下端に揃える
+  const grip = "flex flex-col items-center gap-5 lg:self-stretch lg:justify-between lg:py-6";
   return (
     <div className="rounded-[2.5rem] bg-gradient-to-b from-zinc-200 to-zinc-300 p-5 shadow-[0_20px_40px_-20px_rgb(0_0_0/0.5),inset_0_2px_0_rgb(255_255_255/0.6)] ring-1 ring-black/10 lg:p-7 dark:from-zinc-700 dark:to-zinc-800 dark:shadow-[0_20px_40px_-20px_rgb(0_0_0/0.9),inset_0_1px_0_rgb(255_255_255/0.08)]">
       <div className="grid items-center gap-6 lg:grid-cols-[12rem_minmax(0,1fr)_12rem]">
@@ -226,12 +296,5 @@ export function HandheldShell({ left, right, children, screenLabel, power }: She
         </div>
       </div>
     </div>
-  );
-}
-
-/** グリップの下の小さな説明 */
-export function GripHint({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="min-h-8 text-center text-[11px] leading-snug text-zinc-600 dark:text-zinc-400">{children}</p>
   );
 }
