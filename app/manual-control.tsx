@@ -6,7 +6,6 @@ import {
   ActionButton,
   type Dir,
   Dpad,
-  GripHint,
   HandheldShell,
   Lcd,
   useRepeatPress,
@@ -136,9 +135,14 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
           <Dpad
             onPress={drive}
             onRelease={releaseDir}
-            labels={{ up: "前進", down: "後退", left: "左へ", right: "右へ" }}
+            labels={{
+              up: "前進（押している間だけ・↑ キー）",
+              down: "後退（押している間だけ・↓ キー）",
+              left: "左へ（押している間だけ・← キー）",
+              right: "右へ（押している間だけ・→ キー）",
+            }}
             onCenter={stop}
-            centerLabel="停止"
+            centerLabel="停止（Space キー）"
             disabled={!connected}
           />
           <div className="flex items-center gap-2">
@@ -149,11 +153,6 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
               ＋
             </button>
           </div>
-          <GripHint>
-            押している間だけ走ります（中央で停止）
-            <br />
-            矢印キーでも操作・Space で停止
-          </GripHint>
         </>
       }
       right={
@@ -165,6 +164,7 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
                 size="sm"
                 letter="X"
                 label="前 LED"
+                tip={"前 LED を点灯\n色は画面のライトを押して選びます"}
                 tone="secondary"
                 disabled={!connected}
                 onClick={() => run("前 LED 点灯", (b) => b.setFrontLed(hexToRgb(frontColor)))}
@@ -175,6 +175,7 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
                 size="sm"
                 letter="Y"
                 label="後 LED"
+                tip={"後 LED を点灯\n色は画面のライトを押して選びます"}
                 tone="secondary"
                 disabled={!connected}
                 onClick={() => run("後 LED 点灯", (b) => b.setBackLed(hexToRgb(backColor)))}
@@ -185,6 +186,7 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
                 size="sm"
                 letter="A"
                 label="マトリクス"
+                tip={"マトリクスを点灯\n色は画面のライトを押して選びます"}
                 tone="primary"
                 disabled={!connected}
                 onClick={() => run("マトリクス点灯", (b) => b.setMatrixColor(...hexToRgb(matrixColor)))}
@@ -218,7 +220,6 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
           >
             現在の向きを正面にする
           </button>
-          <GripHint>色は画面のライトを押して選びます</GripHint>
         </>
       }
     >
