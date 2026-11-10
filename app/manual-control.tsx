@@ -2,6 +2,7 @@
 
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import type { Bolt } from "@/lib/bolt/bolt";
+import { MatrixPainter, StatusMarks } from "@/lib/bolt/matrix";
 import {
   ActionButton,
   type Dir,
@@ -14,6 +15,16 @@ import {
 const HEADING: Record<Dir, number> = { up: 0, right: 90, down: 180, left: 270 };
 const DIR_NAME: Record<Dir, string> = { up: "前進", right: "右", down: "後退", left: "左" };
 const KEY_DIR: Record<string, Dir> = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
+
+/** 「マークを試す」で順に出す、自動操縦の状態ごとのマーク */
+const TEST_MARKS: { state: string; label: string }[] = [
+  { state: "waiting", label: "判定待ち（青い目）" },
+  { state: "calibrating", label: "向き合わせ中（紫のくるくる）" },
+  { state: "moving", label: "走行中（緑の矢印）" },
+  { state: "returning", label: "引き返し中（黄色の U ターン）" },
+  { state: "stopped", label: "止まった（赤の ✕）" },
+  { state: "off", label: "消灯" },
+];
 
 function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
@@ -43,6 +54,26 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
   useEffect(() => {
     speedRef.current = speed;
   }, [speed]);
+
+  // 自動操縦で使うマークを、走らせずに確かめる
+  const marksRef = useRef<StatusMarks | null>(null);
+  const testIndex = useRef(-1);
+  const getMarks = () =>
+    (marksRef.current ??= new StatusMarks(
+      new MatrixPainter(
+        () => boltRef.current,
+        (e) => log(`マーク表示 失敗: ${e.message}`),
+      ),
+    ));
+  useEffect(() => () => marksRef.current?.halt(), []);
+  const testNextMark = () => {
+    testIndex.current = (testIndex.current + 1) % TEST_MARKS.length;
+    const m = TEST_MARKS[testIndex.current];
+    setLastAction(`マーク: ${m.label}`);
+    getMarks().set(m.state);
+  };
+  /** 手動でマトリクスの色を変える前に、マークの表示を止める */
+  const haltMarks = () => marksRef.current?.halt();
 
   const run = useCallback(
     async (label: string, fn: (b: Bolt) => Promise<unknown>) => {
@@ -189,7 +220,10 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
                 tip={"マトリクスを点灯\n色は画面のライトを押して選びます"}
                 tone="primary"
                 disabled={!connected}
-                onClick={() => run("マトリクス点灯", (b) => b.setMatrixColor(...hexToRgb(matrixColor)))}
+                onClick={() => {
+                  haltMarks();
+                  void run("マトリクス点灯", (b) => b.setMatrixColor(...hexToRgb(matrixColor)));
+                }}
               />
             </div>
             <div className="col-start-2 row-start-3">
@@ -199,12 +233,13 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
                 label="すべて消灯"
                 tone="secondary"
                 disabled={!connected}
-                onClick={() =>
-                  run("すべて消灯", async (b) => {
+                onClick={() => {
+                  haltMarks();
+                  void run("すべて消灯", async (b) => {
                     await b.setMatrixColor(0, 0, 0);
                     await b.setFrontBackLeds([0, 0, 0], [0, 0, 0]);
-                  })
-                }
+                  });
+                }}
               />
             </div>
           </div>
@@ -219,6 +254,9 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
             }
           >
             現在の向きを正面にする
+          </button>
+          <button className={pill} disabled={!connected} onClick={testNextMark}>
+            マークを試す
           </button>
         </>
       }

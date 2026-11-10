@@ -107,6 +107,16 @@ export class Bolt {
     return this.send(Device.io, 0x2f, [r, g, b], Target.secondary);
   }
 
+  /** マトリクスの 1 点（x = 列、y = 行。0-7） */
+  setMatrixPixel(x: number, y: number, [r, g, b]: [number, number, number]) {
+    return this.send(Device.io, 0x2d, [x, y, r, g, b], Target.secondary);
+  }
+
+  /** マトリクスに線を引く（両端を含む） */
+  drawMatrixLine(x1: number, y1: number, x2: number, y2: number, [r, g, b]: [number, number, number]) {
+    return this.send(Device.io, 0x3d, [x1, y1, x2, y2, r, g, b], Target.secondary);
+  }
+
   /**
    * 前後の LED（各 RGB）。mask の bit0-2 = 前 RGB、bit3-5 = 後 RGB。
    * 値は mask で立てたビットの分だけ、ビット順に並べる。
