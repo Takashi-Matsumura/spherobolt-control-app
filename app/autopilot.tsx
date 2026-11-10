@@ -492,6 +492,7 @@ export default function Autopilot({
       {/* 本体 */}
       <HandheldShell
         power={enabled}
+        connected={connected}
         screenLabel="BOLT PILOT · JEV VISION"
         left={
           <>

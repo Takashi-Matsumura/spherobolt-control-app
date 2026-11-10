@@ -163,6 +163,7 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
   return (
     <HandheldShell
       power={connected}
+      connected={connected}
       screenLabel="BOLT PILOT · MANUAL"
       left={
         <>
