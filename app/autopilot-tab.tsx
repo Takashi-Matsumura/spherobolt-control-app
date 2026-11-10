@@ -1,12 +1,14 @@
 "use client";
 
 import { type RefObject, useEffect, useRef, useState } from "react";
+import { OFF_STATUS } from "@/lib/autopilot/controller";
 import { predictBox } from "@/lib/autopilot/tracker";
+import type { AutopilotState, AutopilotStatus, Track } from "@/lib/autopilot/types";
 import type { Bolt } from "@/lib/bolt/bolt";
-import Autopilot, { type AutopilotStatus, type Track } from "./autopilot";
+import Autopilot from "./autopilot";
 import CameraView from "./camera-view";
 
-const STATE_STYLE: Record<AutopilotStatus["state"], string> = {
+const STATE_STYLE: Record<AutopilotState, string> = {
   off: "",
   waiting: "bg-zinc-700/80",
   calibrating: "bg-sky-600/85",
@@ -15,7 +17,7 @@ const STATE_STYLE: Record<AutopilotStatus["state"], string> = {
   stopped: "bg-red-600/85",
 };
 
-const STATE_LABEL: Record<AutopilotStatus["state"], string> = {
+const STATE_LABEL: Record<AutopilotState, string> = {
   off: "",
   waiting: "判定待ち",
   calibrating: "向き合わせ中",
@@ -63,14 +65,7 @@ type Props = {
 export default function AutopilotTab({ boltRef, connected, active, headingEpoch }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [cameraRunning, setCameraRunning] = useState(false);
-  const [status, setStatus] = useState<AutopilotStatus>({
-    state: "off",
-    visible: null,
-    latencyMs: null,
-    reason: "",
-    track: null,
-    edgeMargin: 0.2,
-  });
+  const [status, setStatus] = useState<AutopilotStatus>(OFF_STATUS);
 
   const track = status.track;
   const showBox = track && status.visible !== null && status.visible >= 0.5;

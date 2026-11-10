@@ -2,14 +2,19 @@
 
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import type { Bolt } from "@/lib/bolt/bolt";
-import { MANUAL_STOP, MatrixPainter, StatusMarks, manualDriveState } from "@/lib/bolt/matrix";
+import type { Rgb } from "@/lib/bolt/bolt";
+import { MANUAL_STOP, type MarkState, StatusMarks, manualDriveState } from "@/lib/bolt/marks";
+import { MatrixPainter } from "@/lib/bolt/matrix";
 import {
   ActionButton,
   type Dir,
   Dpad,
   HandheldShell,
   Lcd,
+  LcdRow,
+  PILL_BUTTON,
   Tip,
+  isTypingTarget,
   useRepeatPress,
 } from "./handheld/controls";
 
@@ -18,7 +23,7 @@ const DIR_NAME: Record<Dir, string> = { up: "前進", right: "右", down: "後�
 const KEY_DIR: Record<string, Dir> = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
 
 /** 「マークを試す」で順に出す、自動操縦の状態ごとのマーク */
-const TEST_MARKS: { state: string; label: string }[] = [
+const TEST_MARKS: { state: MarkState; label: string }[] = [
   { state: "waiting", label: "判定待ち（青い目）" },
   { state: "calibrating", label: "向き合わせ中（紫のくるくる）" },
   { state: "moving", label: "走行中（緑の矢印）" },
@@ -27,7 +32,7 @@ const TEST_MARKS: { state: string; label: string }[] = [
   { state: "off", label: "消灯" },
 ];
 
-function hexToRgb(hex: string): [number, number, number] {
+function hexToRgb(hex: string): Rgb {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
 }
@@ -124,9 +129,8 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
   // キーボード: 矢印キーで走行（離すと停止）、Space で停止
   useEffect(() => {
     if (!connected) return;
-    const isTyping = (e: KeyboardEvent) => (e.target as HTMLElement).closest("input, select, textarea");
     const down = (e: KeyboardEvent) => {
-      if (isTyping(e)) return;
+      if (isTypingTarget(e)) return;
       const d = KEY_DIR[e.key];
       if (d) {
         e.preventDefault();
@@ -156,9 +160,7 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
   const speedButton =
     "flex h-7 w-7 items-center justify-center rounded-full bg-zinc-800 text-base font-medium leading-none text-zinc-200 " +
     "shadow-[inset_0_-2px_0_rgb(0_0_0/0.4)] hover:bg-zinc-700 active:translate-y-px select-none touch-none";
-  const pill =
-    "rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-200 shadow-[inset_0_-2px_0_rgb(0_0_0/0.4)] " +
-    "hover:bg-zinc-700 active:translate-y-px disabled:opacity-40 select-none touch-none";
+  const pill = `${PILL_BUTTON} select-none touch-none`;
 
   return (
     <HandheldShell
@@ -168,16 +170,14 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
       left={
         <>
           <Lcd>
-            <div className="flex justify-between">
-              <span>SPEED</span>
+            <LcdRow label={<span>SPEED</span>}>
               <span>{speed}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>DRIVE</span>
+            </LcdRow>
+            <LcdRow label={<span>DRIVE</span>}>
               <span className={driving ? "text-emerald-300" : "text-zinc-500"}>
                 {driving ? `${HEADING[driving]}°` : "STOP"}
               </span>
-            </div>
+            </LcdRow>
           </Lcd>
           <Dpad
             onPress={drive}

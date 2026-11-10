@@ -2,6 +2,8 @@
 // API キーはサーバ側（TYPESAFE_API_KEY）だけで扱い、ブラウザには渡さない。
 // 仕様: https://docs.typesafe.ai/api, https://docs.typesafe.ai/images.md, https://docs.typesafe.ai/primitives/noul.md
 
+import type { Box, VisionResult } from "@/lib/vision/types";
+
 const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 const MODEL = "jev-1.14.0";
 const TIMEOUT_MS = 5000;
@@ -43,13 +45,6 @@ async function readBodyLimited(request: Request, limit: number): Promise<string 
   }
   return new TextDecoder().decode(Buffer.concat(chunks));
 }
-
-/** 0〜1 の比率（left/right は幅、top/bottom は高さに対する割合） */
-export type Box = { top: number; bottom: number; left: number; right: number; confidence: number | null };
-
-export type VisionResult =
-  | { ok: true; visible: number; box: Box | null; latencyMs: number; model: string }
-  | { ok: false; error: string };
 
 function parseBox(answer: unknown): Box | null {
   const a = answer as { box?: Record<string, unknown>; confidence?: unknown } | undefined;

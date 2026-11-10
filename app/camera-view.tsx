@@ -1,7 +1,7 @@
 "use client";
 
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
-import { PowerIcon, Tip } from "./handheld/controls";
+import { PILL_BUTTON, PowerIcon, Tip } from "./handheld/controls";
 
 // macOS の連係カメラでは、iPhone は「<名前>のカメラ」「iPhone Camera」などのラベルで見える
 const isIPhone = (d: MediaDeviceInfo) => /iphone/i.test(d.label);
@@ -100,10 +100,6 @@ export default function CameraView({ videoRef, onRunningChange, overlay }: Props
     };
   }, [listCameras, stop]);
 
-  const pill =
-    "rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-200 shadow-[inset_0_-2px_0_rgb(0_0_0/0.4)] " +
-    "hover:bg-zinc-700 active:translate-y-px disabled:opacity-40";
-
   return (
     <section className="flex flex-col gap-2">
       {/* 画面 */}
@@ -138,7 +134,7 @@ export default function CameraView({ videoRef, onRunningChange, overlay }: Props
         </Tip>
         {devices.length > 0 && (
           <select
-            className={`${pill} max-w-[14rem] truncate`}
+            className={`${PILL_BUTTON} max-w-[14rem] truncate`}
             value={deviceId}
             onChange={(e) => {
               setDeviceId(e.target.value);
