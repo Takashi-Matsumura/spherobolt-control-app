@@ -12,7 +12,16 @@ import {
   imageDistance,
   isNearEdge,
 } from "@/lib/autopilot/geometry";
-import { type Segment, predictCenter, segmentFor, updateGain } from "@/lib/autopilot/tracker";
+import {
+  type Command,
+  type Segment,
+  displacement,
+  gainFromPulse,
+  predictCenter,
+  pushSegments,
+  segmentsFor,
+  updateGain,
+} from "@/lib/autopilot/tracker";
 import type { Box, VisionResult } from "./api/vision/route";
 import { ActionButton, ChevronIcon, HandheldShell, Lcd, RepeatDpad } from "./handheld/controls";
 
@@ -84,6 +93,8 @@ type Judgment = { visible: number; box: Box | null; latencyMs: number; capturedA
 
 /** 予測に使う走行命令の履歴を、どれだけ前まで残すか */
 const SEGMENT_HISTORY_MS = 3000;
+/** 予測のずれをログに出す間隔 */
+const ERROR_LOG_MS = 5000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -175,6 +186,9 @@ export default function Autopilot({
     let last: Judgment | null = null;
     let segments: Segment[] = [];
     let prevObs: { p: Point; t: number } | null = null;
+    let lastCmd: Command | null = null;
+    // 予測のずれの集計（前回の判定から予測した位置と、今回判定した位置の差）
+    let errStats = { pred: 0, none: 0, n: 0, since: Date.now() };
     // 接続し直すと中身が変わるので、使うたびに最新の接続を読む
     const getBolt = () => boltRef.current;
     const canvas = document.createElement("canvas");
@@ -194,12 +208,29 @@ export default function Autopilot({
     const recordCommand = (speed: number, h: number) => {
       const cal = calibrationRef.current;
       const gain = gainRef.current;
+      const prev = lastCmd;
+      const next = { speed, heading: h };
+      lastCmd = next;
       if (!cal || gain === null) return;
       const now = Date.now();
-      segments.push(segmentFor(now, speed, h, cal, gain, aspect));
-      // 古い区間は捨てる（ただし今も続いている区間は残す）
-      const cutoff = now - SEGMENT_HISTORY_MS;
-      while (segments.length > 1 && segments[1].t < cutoff) segments.shift();
+      segments = pushSegments(segments, segmentsFor(now, prev, next, cal, gain, aspect), now, SEGMENT_HISTORY_MS);
+    };
+
+    /** 前回の判定から予測した位置と、今回判定した位置のずれを集計し、ときどきログに出す */
+    const measureError = (prev: { p: Point; t: number }, cur: { p: Point; t: number }) => {
+      const d = displacement(segments, prev.t, cur.t);
+      errStats.pred += imageDistance({ x: prev.p.x + d.x, y: prev.p.y + d.y }, cur.p, aspect);
+      errStats.none += imageDistance(prev.p, cur.p, aspect);
+      errStats.n += 1;
+      const now = Date.now();
+      if (now - errStats.since >= ERROR_LOG_MS && errStats.n >= 3) {
+        const f = (v: number) => `${((v / errStats.n) * 100).toFixed(1)}%`;
+        addLog(
+          `予測のずれ: 平均 ${f(errStats.pred)}（予測なしなら ${f(errStats.none)}）` +
+            `、画面の高さに対する割合・${errStats.n} 回分`,
+        );
+        errStats = { pred: 0, none: 0, n: 0, since: now };
+      }
     };
 
     const stop = (reason: string) => {
@@ -297,10 +328,12 @@ export default function Autopilot({
       await pulseAndMeasure(270);
 
       const cal = calibrate(theta0, theta90);
-      // 試走で進んだ距離から、速度 1 あたりの進み方の初期値を求める（加速・減速を含むので少なめに出る）
-      const gain = (d0 + d90) / 2 / CAL_PULSE_MS / calSpeed();
+      // 試走で進んだ距離から、速度 1 あたりの進み方の初期値を求める
+      // 予測と同じ遅れの考え方で割るので、同じ試走を予測するとちょうど同じだけ進む
+      const gain = gainFromPulse((d0 + d90) / 2, CAL_PULSE_MS, calSpeed());
       saveCalibration(cal, gain);
       segments = [];
+      lastCmd = { speed: 0, heading: 0 };
       addLog(
         `向き合わせ完了: 0° は映像の ${Math.round(theta0)}° 方向、` +
           `${cal.sign === 1 ? "時計回り" : "反時計回り"}（誤差 ${Math.round(cal.error)}°）`,
@@ -344,7 +377,10 @@ export default function Autopilot({
           if (p && calibrationRef.current && gainRef.current !== null) {
             // 走りながら、実際の進み方で速さを学び直す
             const obs = { p, t: j.capturedAt };
-            if (prevObs) gainRef.current = updateGain(gainRef.current, segments, prevObs, obs, aspect);
+            if (prevObs) {
+              measureError(prevObs, obs);
+              gainRef.current = updateGain(gainRef.current, segments, prevObs, obs, aspect);
+            }
             prevObs = obs;
           }
           if (!p) {

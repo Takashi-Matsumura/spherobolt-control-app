@@ -4,15 +4,24 @@
 // 自分が出した走行命令（いつ・どの向きに・どの速さで）から「撮った時刻から今までに進んだ分」を足す。
 // 座標は Box と同じ 0〜1 の比率（x は幅、y は高さに対する割合）。
 
-import { type Calibration, type Edges, type Point, center, imageDistance } from "./geometry";
+import { type Calibration, type Edges, type Point, center } from "./geometry";
 
-/** 走行命令が実際の動きに反映されるまでの遅れ（加速・減速をまとめて遅れとして扱う） */
-export const MOTION_LAG_MS = 150;
+/** 止まっている状態から走らせたとき、動き出すまでの遅れ（加速をまとめて遅れとして扱う） */
+export const START_LAG_MS = 300;
+/** 止める・向きを少し変えるときの遅れ（減速・惰性をまとめて遅れとして扱う） */
+export const STOP_LAG_MS = 150;
+/** この角度以上向きを変えるときは、いったん止まってから向きを変えるとみなす */
+export const TURN_STOP_DEG = 30;
+/** 180° 向きを変えるのにかかる時間（角度に比例させる） */
+export const TURN_MS_PER_180 = 600;
 /** これより先は予測しない（判定が途絶えたときに枠が飛んでいかないように） */
 export const MAX_PREDICT_MS = 1000;
 
 /** ある時刻から始まる速度（比率/ミリ秒）。止まる命令は速度 0 */
 export type Segment = { t: number; vx: number; vy: number; speed: number };
+
+/** 直前に出した走行命令 */
+export type Command = { speed: number; heading: number };
 
 /** heading の向きに進むときの、映像の中での単位ベクトル（比率の座標に直したもの） */
 export function directionOf(heading: number, cal: Calibration, aspect: number): Point {
@@ -21,22 +30,65 @@ export function directionOf(heading: number, cal: Calibration, aspect: number): 
   return { x: Math.cos(phi) / aspect, y: Math.sin(phi) };
 }
 
+/** 2 つの向きの差（0〜180°） */
+export function headingDiff(a: number, b: number): number {
+  const d = Math.abs((((a - b) % 360) + 360) % 360);
+  return d > 180 ? 360 - d : d;
+}
+
 /**
- * 走行命令から速度の区間を作る。
+ * 走行命令から、速度の区間を作る。
  * gain は「速度 1 あたり、映像の中を 1 ミリ秒に進む距離（高さを 1 とした単位）」。
+ *
+ * - 止める: STOP_LAG_MS 後に速度 0
+ * - 止まっている状態から走る: START_LAG_MS 後に動き出す
+ * - 走りながら少し向きを変える: STOP_LAG_MS 後に新しい向き
+ * - 大きく向きを変える: STOP_LAG_MS 後にいったん止まり、角度に比例した時間をかけて向きを変えてから動き出す
  */
-export function segmentFor(
+export function segmentsFor(
   t: number,
-  speed: number,
-  heading: number,
+  prev: Command | null,
+  next: Command,
   cal: Calibration,
   gain: number,
   aspect: number,
-): Segment {
-  if (speed <= 0) return { t: t + MOTION_LAG_MS, vx: 0, vy: 0, speed: 0 };
-  const d = directionOf(heading, cal, aspect);
-  const m = gain * speed;
-  return { t: t + MOTION_LAG_MS, vx: d.x * m, vy: d.y * m, speed };
+): Segment[] {
+  if (next.speed <= 0) return [{ t: t + STOP_LAG_MS, vx: 0, vy: 0, speed: 0 }];
+  const d = directionOf(next.heading, cal, aspect);
+  const m = gain * next.speed;
+  const run = (at: number): Segment => ({ t: at, vx: d.x * m, vy: d.y * m, speed: next.speed });
+  if (!prev || prev.speed <= 0) return [run(t + START_LAG_MS)];
+  const turn = headingDiff(prev.heading, next.heading);
+  if (turn < TURN_STOP_DEG) return [run(t + STOP_LAG_MS)];
+  const stopAt = t + STOP_LAG_MS;
+  return [
+    { t: stopAt, vx: 0, vy: 0, speed: 0 },
+    run(stopAt + (TURN_MS_PER_180 * turn) / 180),
+  ];
+}
+
+/**
+ * 区間の履歴に新しい区間を足す。まだ始まっていない古い区間は、新しい命令で取り消されたものとして捨てる。
+ * 古すぎる区間も捨てる（ただし今も続いている区間は残す）。
+ */
+export function pushSegments(history: Segment[], added: Segment[], now: number, keepMs: number): Segment[] {
+  if (added.length === 0) return history;
+  const first = added[0].t;
+  const kept = history.filter((s) => s.t < first);
+  const all = [...kept, ...added];
+  const cutoff = now - keepMs;
+  while (all.length > 1 && all[1].t < cutoff) all.shift();
+  return all;
+}
+
+/**
+ * 試走（speed で durationMs 走って止める）で dist 進んだときの gain。
+ * 予測と同じ遅れの考え方（動き出しに START_LAG_MS、止まるのに STOP_LAG_MS）で割るので、
+ * 同じ試走を予測すると、ちょうど dist 進む。
+ */
+export function gainFromPulse(dist: number, durationMs: number, speed: number): number {
+  const moving = Math.max(durationMs - START_LAG_MS + STOP_LAG_MS, 1);
+  return dist / moving / speed;
 }
 
 /** from から to までに進む量（区間をまたいで積算する） */
@@ -75,20 +127,13 @@ export function predictCenter(box: Edges, capturedAt: number, now: number, segme
   return center(predictBox(box, capturedAt, now, segments));
 }
 
-/** 同じ速度で走り続けている区間の中か（加速が終わってから） */
-function steadySegment(segments: Segment[], t1: number, t2: number): Segment | null {
-  let seg: Segment | null = null;
-  for (const s of segments) {
-    if (s.t <= t1) seg = s;
-    else if (s.t < t2) return null; // 途中で命令が変わった
-  }
-  if (!seg || seg.speed <= 0 || t1 - seg.t < 250) return null;
-  return seg;
-}
+/** 予測した移動量がこれより小さいときは、学び直しに使わない（判定の揺れに埋もれるため） */
+const MIN_LEARN_DISTANCE = 0.03;
 
 /**
- * 連続する 2 回の判定から、速度 1 あたりの進み方（gain）を学び直す。
- * 同じ命令で走り続けている間の観測だけを使い、外れ値は捨てる。
+ * 連続する 2 回の判定から、gain を学び直す。
+ * 「予測した移動量」に対して「実際の移動量」がどれだけだったかを、予測した向きに沿って比べる。
+ * 向きを変えている途中の観測も使えるが、外れ値は捨てる。
  */
 export function updateGain(
   gain: number,
@@ -97,11 +142,14 @@ export function updateGain(
   cur: { p: Point; t: number },
   aspect: number,
 ): number {
-  const seg = steadySegment(segments, prev.t, cur.t);
-  const dt = cur.t - prev.t;
-  if (!seg || dt < 100) return gain;
-  const observed = imageDistance(prev.p, cur.p, aspect) / dt / seg.speed;
-  if (!Number.isFinite(observed) || observed <= 0) return gain;
-  if (observed > gain * 4 || observed < gain / 4) return gain; // 判定の揺れによる外れ値
-  return gain * 0.7 + observed * 0.3;
+  const pred = displacement(segments, prev.t, cur.t);
+  const px = pred.x * aspect;
+  const py = pred.y;
+  const len2 = px * px + py * py;
+  if (len2 < MIN_LEARN_DISTANCE * MIN_LEARN_DISTANCE) return gain;
+  const ox = (cur.p.x - prev.p.x) * aspect;
+  const oy = cur.p.y - prev.p.y;
+  const ratio = (ox * px + oy * py) / len2;
+  if (!Number.isFinite(ratio) || ratio < 0.25 || ratio > 4) return gain; // 判定の揺れによる外れ値
+  return gain * (0.7 + 0.3 * ratio);
 }
