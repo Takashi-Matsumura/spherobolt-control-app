@@ -1,6 +1,7 @@
 "use client";
 
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
+import { PowerIcon, Tip } from "./handheld/controls";
 
 // macOS の連係カメラでは、iPhone は「<名前>のカメラ」「iPhone Camera」などのラベルで見える
 const isIPhone = (d: MediaDeviceInfo) => /iphone/i.test(d.label);
@@ -112,19 +113,29 @@ export default function CameraView({ videoRef, onRunningChange, overlay }: Props
         {!running && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center text-zinc-400">
             <p className="text-sm">カメラは停止中です</p>
-            <p className="max-w-md text-xs text-zinc-500">
-              下の「カメラ」を押すと、iPhone が見つかれば自動で選びます。iPhone のロックを解除し、Mac と同じ Apple
-              アカウントでサインインしておいてください（macOS の連係カメラ）。
-            </p>
           </div>
         )}
       </div>
       {/* 画面の下の小さなボタン列 */}
       <div className="flex flex-wrap items-center gap-2">
-        <button className={pill} onClick={running ? stop : () => start(deviceId || undefined)}>
-          <span className={`mr-1.5 inline-block h-2 w-2 rounded-full ${running ? "bg-red-500" : "bg-zinc-500"}`} />
-          {running ? "カメラを止める" : "カメラ"}
-        </button>
+        <Tip
+          text={
+            running
+              ? "電源を切る（カメラを止める）"
+              : "電源を入れる（カメラを開始）\niPhone が見つかれば自動で選びます。iPhone のロックを解除し、Mac と同じ Apple アカウントでサインインしておいてください（macOS の連係カメラ）。"
+          }
+        >
+          <button
+            aria-label={running ? "カメラを止める" : "カメラを開始"}
+            aria-pressed={running}
+            onClick={running ? stop : () => start(deviceId || undefined)}
+            className={`flex h-7 w-7 items-center justify-center rounded-full bg-zinc-800 shadow-[inset_0_-2px_0_rgb(0_0_0/0.4)] hover:bg-zinc-700 active:translate-y-px ${
+              running ? "text-emerald-400 drop-shadow-[0_0_4px_rgb(52_211_153)]" : "text-zinc-400"
+            }`}
+          >
+            <PowerIcon />
+          </button>
+        </Tip>
         {devices.length > 0 && (
           <select
             className={`${pill} max-w-[14rem] truncate`}
