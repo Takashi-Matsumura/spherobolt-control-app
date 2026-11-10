@@ -22,6 +22,7 @@ import {
   segmentsFor,
   updateGain,
 } from "@/lib/autopilot/tracker";
+import { MatrixPainter, StatusMarks } from "@/lib/bolt/matrix";
 import type { Box, VisionResult } from "./api/vision/route";
 import { ActionButton, ChevronIcon, HandheldShell, Lcd, RepeatDpad } from "./handheld/controls";
 
@@ -194,7 +195,18 @@ export default function Autopilot({
     const canvas = document.createElement("canvas");
     const aspect = FRAME_WIDTH / FRAME_HEIGHT;
 
-    const report = (state: AutopilotState, reason: string) =>
+    // マトリクスに状態のマークを出す。表示に失敗しても走行は続ける（ログは 1 回だけ）
+    let matrixFailed = false;
+    const marks = new StatusMarks(
+      new MatrixPainter(getBolt, (e) => {
+        if (matrixFailed) return;
+        matrixFailed = true;
+        addLog(`マトリクス表示に失敗しました（走行は続けます）: ${e.message}`);
+      }),
+    );
+
+    const report = (state: AutopilotState, reason: string) => {
+      marks.set(state);
       onStatus({
         state,
         visible: last?.visible ?? null,
@@ -203,6 +215,7 @@ export default function Autopilot({
         track: last?.box ? { box: last.box, capturedAt: last.capturedAt, segments: [...segments] } : null,
         edgeMargin: EDGE_MARGIN,
       });
+    };
 
     /** 走行命令を予測用の履歴に積む（向き合わせ前は速さが分からないので積まない） */
     const recordCommand = (speed: number, h: number) => {
@@ -426,6 +439,8 @@ export default function Autopilot({
       getBolt()
         ?.stop(heading)
         .catch(() => {});
+      // 停止命令の後に消す
+      marks.dispose();
     };
   }, [enabled, boltRef, videoRef, onStatus, addLog, saveCalibration]);
 
