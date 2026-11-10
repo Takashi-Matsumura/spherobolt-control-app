@@ -12,6 +12,7 @@ import {
   imageDistance,
   isNearEdge,
 } from "@/lib/autopilot/geometry";
+import { type Segment, predictCenter, segmentFor, updateGain } from "@/lib/autopilot/tracker";
 import type { Box, VisionResult } from "./api/vision/route";
 import { ActionButton, GripHint, HandheldShell, Lcd, RepeatDpad } from "./handheld/controls";
 
@@ -44,12 +45,22 @@ const CAL_RETRY_MS = 3000;
 
 export type AutopilotState = "off" | "waiting" | "calibrating" | "moving" | "returning" | "stopped";
 
+/** 判定した位置と、そこから現在地を予測するための材料 */
+export type Track = {
+  /** 判定に使ったコマでの BOLT の位置 */
+  box: Box;
+  /** そのコマを撮った時刻（Date.now()） */
+  capturedAt: number;
+  /** 走行命令から求めた速度の区間 */
+  segments: Segment[];
+};
+
 export type AutopilotStatus = {
   state: AutopilotState;
   visible: number | null;
   latencyMs: number | null;
   reason: string;
-  box: Box | null;
+  track: Track | null;
   edgeMargin: number;
 };
 
@@ -69,7 +80,10 @@ type Props = {
 
 type StoredCalibration = Calibration & { headingEpoch: number };
 
-type Judgment = { visible: number; box: Box | null; latencyMs: number };
+type Judgment = { visible: number; box: Box | null; latencyMs: number; capturedAt: number };
+
+/** 予測に使う走行命令の履歴を、どれだけ前まで残すか */
+const SEGMENT_HISTORY_MS = 3000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -118,9 +132,13 @@ export default function Autopilot({
     headingEpochRef.current = headingEpoch;
   }, [speed, threshold, calibration, headingEpoch]);
 
-  const saveCalibration = useCallback((c: Calibration | null) => {
+  // 速度 1 あたり映像の中を 1 ミリ秒に進む距離。向き合わせで初期値を測り、走りながら学び直す
+  const gainRef = useRef<number | null>(null);
+
+  const saveCalibration = useCallback((c: Calibration | null, gain: number | null = null) => {
     const value = c && { ...c, headingEpoch: headingEpochRef.current };
     calibrationRef.current = value;
+    gainRef.current = gain;
     setStored(value);
   }, []);
 
@@ -142,7 +160,7 @@ export default function Autopilot({
 
   useEffect(() => {
     if (!enabled) {
-      onStatus({ state: "off", visible: null, latencyMs: null, reason: "", box: null, edgeMargin: EDGE_MARGIN });
+      onStatus({ state: "off", visible: null, latencyMs: null, reason: "", track: null, edgeMargin: EDGE_MARGIN });
       return;
     }
 
@@ -155,6 +173,8 @@ export default function Autopilot({
     let lastStopSent = 0;
     let calFailedAt = 0;
     let last: Judgment | null = null;
+    let segments: Segment[] = [];
+    let prevObs: { p: Point; t: number } | null = null;
     // 接続し直すと中身が変わるので、使うたびに最新の接続を読む
     const getBolt = () => boltRef.current;
     const canvas = document.createElement("canvas");
@@ -166,9 +186,21 @@ export default function Autopilot({
         visible: last?.visible ?? null,
         latencyMs: last?.latencyMs ?? null,
         reason,
-        box: last?.box ?? null,
+        track: last?.box ? { box: last.box, capturedAt: last.capturedAt, segments: [...segments] } : null,
         edgeMargin: EDGE_MARGIN,
       });
+
+    /** 走行命令を予測用の履歴に積む（向き合わせ前は速さが分からないので積まない） */
+    const recordCommand = (speed: number, h: number) => {
+      const cal = calibrationRef.current;
+      const gain = gainRef.current;
+      if (!cal || gain === null) return;
+      const now = Date.now();
+      segments.push(segmentFor(now, speed, h, cal, gain, aspect));
+      // 古い区間は捨てる（ただし今も続いている区間は残す）
+      const cutoff = now - SEGMENT_HISTORY_MS;
+      while (segments.length > 1 && segments[1].t < cutoff) segments.shift();
+    };
 
     const stop = (reason: string) => {
       const now = Date.now();
@@ -176,18 +208,21 @@ export default function Autopilot({
       if (moving || now - lastStopSent > 2000) {
         if (moving) addLog(`停止: ${reason}`);
         lastStopSent = now;
+        recordCommand(0, heading);
         getBolt()
           ?.stop(heading)
           .catch((e) => addLog(`停止コマンド失敗: ${(e as Error).message}`));
       }
       moving = false;
       returning = false;
+      prevObs = null;
       report("stopped", reason);
     };
 
     const roll = (h: number) => {
       heading = h;
       moving = true;
+      recordCommand(speedRef.current, h);
       getBolt()
         ?.roll(speedRef.current, h)
         .catch((e) => stop(`走行コマンド失敗: ${(e as Error).message}`));
@@ -201,6 +236,7 @@ export default function Autopilot({
     const judge = async (): Promise<Judgment> => {
       const video = videoRef.current;
       if (!video || video.readyState < 2) throw new Error("カメラ映像がありません");
+      const capturedAt = Date.now();
       const image = await captureFrame(video, canvas);
       const res = await fetch("/api/vision", {
         method: "POST",
@@ -209,7 +245,7 @@ export default function Autopilot({
       });
       const result = (await res.json()) as VisionResult;
       if (!result.ok) throw new Error(result.error);
-      last = { visible: result.visible, box: result.box, latencyMs: result.latencyMs };
+      last = { visible: result.visible, box: result.box, latencyMs: result.latencyMs, capturedAt };
       return last;
     };
 
@@ -221,10 +257,12 @@ export default function Autopilot({
     };
 
     /** 決まった時間だけ走って止まり、止まった後の位置を測る */
+    const calSpeed = () => Math.max(speedRef.current, CAL_MIN_SPEED);
+
     const pulseAndMeasure = async (h: number): Promise<Point> => {
       const bolt = getBolt();
       if (!bolt) throw new Error("BOLT が接続されていません");
-      await bolt.roll(Math.max(speedRef.current, CAL_MIN_SPEED), h);
+      await bolt.roll(calSpeed(), h);
       await sleep(CAL_PULSE_MS);
       await bolt.stop(h);
       await sleep(CAL_SETTLE_MS);
@@ -259,7 +297,10 @@ export default function Autopilot({
       await pulseAndMeasure(270);
 
       const cal = calibrate(theta0, theta90);
-      saveCalibration(cal);
+      // 試走で進んだ距離から、速度 1 あたりの進み方の初期値を求める（加速・減速を含むので少なめに出る）
+      const gain = (d0 + d90) / 2 / CAL_PULSE_MS / calSpeed();
+      saveCalibration(cal, gain);
+      segments = [];
       addLog(
         `向き合わせ完了: 0° は映像の ${Math.round(theta0)}° 方向、` +
           `${cal.sign === 1 ? "時計回り" : "反時計回り"}（誤差 ${Math.round(cal.error)}°）`,
@@ -300,6 +341,12 @@ export default function Autopilot({
           const j = await judge();
           if (cancelled) break;
           const p = positionOf(j);
+          if (p && calibrationRef.current && gainRef.current !== null) {
+            // 走りながら、実際の進み方で速さを学び直す
+            const obs = { p, t: j.capturedAt };
+            if (prevObs) gainRef.current = updateGain(gainRef.current, segments, prevObs, obs, aspect);
+            prevObs = obs;
+          }
           if (!p) {
             stop(
               j.visible < thresholdRef.current
@@ -323,7 +370,8 @@ export default function Autopilot({
             }
           } else {
             lastSeen = Date.now();
-            drive(p);
+            // 判定は撮った時点の位置なので、そこから今までに進んだ分を足した現在地で判断する
+            drive(predictCenter(j.box!, j.capturedAt, Date.now(), segments));
           }
         } catch (e) {
           if (cancelled) break;
