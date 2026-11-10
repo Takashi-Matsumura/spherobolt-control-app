@@ -36,6 +36,16 @@ export function useRepeatPress(action: () => void) {
 
 export type Dir = "up" | "down" | "left" | "right";
 
+/** 画面の下などに置く、小さな丸みのあるボタン（select にも使う） */
+export const PILL_BUTTON =
+  "rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-200 shadow-[inset_0_-2px_0_rgb(0_0_0/0.4)] " +
+  "hover:bg-zinc-700 active:translate-y-px disabled:opacity-40";
+
+/** キー操作が入力欄に向いているか（そのときは BOLT の操作に使わない） */
+export function isTypingTarget(e: KeyboardEvent): boolean {
+  return (e.target as HTMLElement).closest("input, select, textarea") !== null;
+}
+
 export type PressHandlers = {
   onPointerDown: () => void;
   onPointerUp: () => void;
@@ -231,6 +241,16 @@ export function ActionButton({ letter, label, onClick, disabled, tone, tip, size
         {letter}
       </button>
     </Tip>
+  );
+}
+
+/** 液晶の 1 行: 左に項目名、右に値 */
+export function LcdRow({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex justify-between">
+      {label}
+      {children}
+    </div>
   );
 }
 

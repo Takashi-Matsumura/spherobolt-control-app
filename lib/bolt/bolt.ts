@@ -17,6 +17,9 @@ type Pending = { resolve: (p: Packet) => void; reject: (e: Error) => void; timer
 
 export type LogFn = (msg: string) => void;
 
+/** 色（各 0〜255） */
+export type Rgb = [number, number, number];
+
 export class Bolt {
   private device?: BluetoothDevice;
   private char?: BluetoothRemoteGATTCharacteristic;
@@ -108,12 +111,12 @@ export class Bolt {
   }
 
   /** マトリクスの 1 点（x = 列、y = 行。0-7） */
-  setMatrixPixel(x: number, y: number, [r, g, b]: [number, number, number]) {
+  setMatrixPixel(x: number, y: number, [r, g, b]: Rgb) {
     return this.send(Device.io, 0x2d, [x, y, r, g, b], Target.secondary);
   }
 
   /** マトリクスに線を引く（両端を含む） */
-  drawMatrixLine(x1: number, y1: number, x2: number, y2: number, [r, g, b]: [number, number, number]) {
+  drawMatrixLine(x1: number, y1: number, x2: number, y2: number, [r, g, b]: Rgb) {
     return this.send(Device.io, 0x3d, [x1, y1, x2, y2, r, g, b], Target.secondary);
   }
 
@@ -125,15 +128,15 @@ export class Bolt {
     return this.send(Device.io, 0x1a, [0, 0, 0, mask, ...values], Target.primary);
   }
 
-  setFrontLed(rgb: [number, number, number]) {
+  setFrontLed(rgb: Rgb) {
     return this.setLeds(0b000111, rgb);
   }
 
-  setBackLed(rgb: [number, number, number]) {
+  setBackLed(rgb: Rgb) {
     return this.setLeds(0b111000, rgb);
   }
 
-  setFrontBackLeds(front: [number, number, number], back: [number, number, number]) {
+  setFrontBackLeds(front: Rgb, back: Rgb) {
     return this.setLeds(0b111111, [...front, ...back]);
   }
 

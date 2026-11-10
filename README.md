@@ -156,13 +156,18 @@ npm run dev
 |---|---|
 | `lib/bolt/protocol.ts` | Sphero API v2 のパケットの組み立てと解析 |
 | `lib/bolt/bolt.ts` | Web Bluetooth での接続と、BOLT の操作 API |
-| `lib/bolt/matrix.ts` | マトリクスへのマーク表示（差分だけを送る描画、状態ごとのマーク） |
+| `lib/bolt/matrix.ts` | マトリクスへの描画（前の絵との差だけを送る） |
+| `lib/bolt/marks.ts` | 自動操縦・手動操作の状態ごとのマークと、それを出し続ける `StatusMarks` |
+| `lib/autopilot/controller.ts` | 自動操縦の本体（判定ループ、向き合わせ、走行・引き返し、見張りタイマー）。React に依存しない |
+| `lib/autopilot/vision-client.ts` | カメラの 1 コマを JPEG にして `/api/vision` に送る |
 | `lib/autopilot/tracker.ts` | 判定の遅れを補う、BOLT の現在地の予測 |
 | `lib/autopilot/geometry.ts` | 映像の中の方向と BOLT の向きを対応づける計算（向き合わせ） |
+| `lib/autopilot/types.ts` | 自動操縦の状態の型（画面・マークと共有） |
+| `lib/vision/types.ts` | 判定結果の型（`/api/vision` と自動操縦で共有） |
 | `app/robot-app.tsx` | 画面全体（接続バー、タブ、通信ログ） |
 | `app/connection-bar.tsx` | 共通の接続バー（接続・切断・電池診断・起こす） |
 | `app/autopilot-tab.tsx` | 自動操縦の画面（カメラと映像上の表示） |
-| `app/autopilot.tsx` | 自動操縦（判定ループ、向き合わせ、引き返し、見張りタイマー、操作部） |
+| `app/autopilot.tsx` | 自動操縦の操作部（ボタン・十字キー・液晶）とログ。`startAutopilot()` を呼ぶ |
 | `app/manual-control.tsx` | 手動操作の画面 |
 | `app/camera-view.tsx` | カメラ映像の表示 |
 | `app/handheld/controls.tsx` | 携帯ゲーム機風の部品（本体、十字キー、ボタン、表示窓） |
