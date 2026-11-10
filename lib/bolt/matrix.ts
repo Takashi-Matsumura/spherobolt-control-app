@@ -267,6 +267,49 @@ export function autopilotFrame(state: string, tick: number): Frame {
   }
 }
 
+// ---- 手動操作のマーク ----
+
+/** 矢印の頭の高さ。残りの行が軸になる */
+const HEAD_ROWS = 3;
+/** 速さの段階の数（軸の長さ 0〜5 行） */
+export const SPEED_LEVELS = SIZE - HEAD_ROWS + 1;
+
+/** 手動操作で走っているときの状態名（速さを段階にしたもの） */
+export function manualDriveState(speed: number): string {
+  const level = Math.min(SPEED_LEVELS, Math.max(1, Math.ceil((speed / 255) * SPEED_LEVELS)));
+  return `manual-drive-${level}`;
+}
+export const MANUAL_STOP = "manual-stop";
+
+/** 速さの矢印: 先端は進む向き（絵の上）の端に固定し、速いほど軸が後ろへ長く伸びる */
+export function speedArrowFrame(level: number): Rows {
+  const head = ["...##...", "..####..", ".######."];
+  const shaft = level - 1;
+  return Array.from({ length: SIZE }, (_, y) =>
+    y < HEAD_ROWS ? head[y] : y < HEAD_ROWS + shaft ? "...##..." : "........",
+  );
+}
+
+/** 停止: 中央の四角 */
+const STOP_SQUARE: Rows = [
+  "........",
+  "........",
+  "..####..",
+  "..####..",
+  "..####..",
+  "..####..",
+  "........",
+  "........",
+];
+
+/** 手動操作の状態ごとの表示。それ以外の状態は自動操縦の表示 */
+export function markFrame(state: string, tick: number): Frame {
+  const m = /^manual-drive-(\d)$/.exec(state);
+  if (m) return { rows: speedArrowFrame(Number(m[1])), color: COLORS.green };
+  if (state === MANUAL_STOP) return { rows: STOP_SQUARE, color: COLORS.red };
+  return autopilotFrame(state, tick);
+}
+
 /** 動きのある状態（コマを進める必要がある状態） */
 const ANIMATED = new Set(["waiting", "calibrating"]);
 export const FRAME_MS = 250;
@@ -279,7 +322,7 @@ export class StatusMarks {
 
   constructor(
     private painter: MatrixPainter,
-    private frame: (state: string, tick: number) => Frame = autopilotFrame,
+    private frame: (state: string, tick: number) => Frame = markFrame,
   ) {}
 
   set(state: string) {

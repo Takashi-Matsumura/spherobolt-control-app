@@ -2,13 +2,14 @@
 
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import type { Bolt } from "@/lib/bolt/bolt";
-import { MatrixPainter, StatusMarks } from "@/lib/bolt/matrix";
+import { MANUAL_STOP, MatrixPainter, StatusMarks, manualDriveState } from "@/lib/bolt/matrix";
 import {
   ActionButton,
   type Dir,
   Dpad,
   HandheldShell,
   Lcd,
+  Tip,
   useRepeatPress,
 } from "./handheld/controls";
 
@@ -58,13 +59,16 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
   // 自動操縦で使うマークを、走らせずに確かめる
   const marksRef = useRef<StatusMarks | null>(null);
   const testIndex = useRef(-1);
-  const getMarks = () =>
-    (marksRef.current ??= new StatusMarks(
-      new MatrixPainter(
-        () => boltRef.current,
-        (e) => log(`マーク表示 失敗: ${e.message}`),
-      ),
-    ));
+  const getMarks = useCallback(
+    () =>
+      (marksRef.current ??= new StatusMarks(
+        new MatrixPainter(
+          () => boltRef.current,
+          (e) => log(`マーク表示 失敗: ${e.message}`),
+        ),
+      )),
+    [boltRef, log],
+  );
   useEffect(() => () => marksRef.current?.halt(), []);
   const testNextMark = () => {
     testIndex.current = (testIndex.current + 1) % TEST_MARKS.length;
@@ -90,13 +94,15 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
     [boltRef, log],
   );
 
+  // マトリクスに走行の様子を出す（走行命令の後に送るので、走り出しは遅れない）
   const drive = useCallback(
     (d: Dir) => {
       drivingRef.current = d;
       setDriving(d);
       void run(`${DIR_NAME[d]}（${HEADING[d]}°）`, (b) => b.roll(speedRef.current, HEADING[d]));
+      getMarks().set(manualDriveState(speedRef.current));
     },
-    [run],
+    [run, getMarks],
   );
 
   const stop = useCallback(() => {
@@ -104,7 +110,13 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
     drivingRef.current = null;
     setDriving(null);
     void run("停止", (b) => b.stop(d ? HEADING[d] : 0));
-  }, [run]);
+    getMarks().set(MANUAL_STOP);
+  }, [run, getMarks]);
+
+  // 走っている間に速さを変えたら、バーの長さも変える
+  useEffect(() => {
+    if (drivingRef.current) marksRef.current?.set(manualDriveState(speed));
+  }, [speed]);
 
   // 十字キーは押している間だけ走る。離したとき、別の方向に切り替わっていたら止めない
   const releaseDir = useCallback((d: Dir) => drivingRef.current === d && stop(), [stop]);
@@ -141,6 +153,9 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
 
   const speedDown = useRepeatPress(() => setSpeed((v) => Math.max(0, v - 10)));
   const speedUp = useRepeatPress(() => setSpeed((v) => Math.min(255, v + 10)));
+  const speedButton =
+    "flex h-7 w-7 items-center justify-center rounded-full bg-zinc-800 text-base font-medium leading-none text-zinc-200 " +
+    "shadow-[inset_0_-2px_0_rgb(0_0_0/0.4)] hover:bg-zinc-700 active:translate-y-px select-none touch-none";
   const pill =
     "rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-200 shadow-[inset_0_-2px_0_rgb(0_0_0/0.4)] " +
     "hover:bg-zinc-700 active:translate-y-px disabled:opacity-40 select-none touch-none";
@@ -176,13 +191,21 @@ export default function ManualControl({ boltRef, connected, log, onHeadingReset 
             centerLabel="停止（Space キー）"
             disabled={!connected}
           />
-          <div className="flex items-center gap-2">
-            <button className={pill} {...speedDown} aria-label="速度を下げる">
-              SPEED −
-            </button>
-            <button className={pill} {...speedUp} aria-label="速度を上げる">
-              ＋
-            </button>
+          <div className="flex flex-col items-center gap-1.5">
+            <div className="flex items-center gap-2">
+              <Tip text="速度を下げる">
+                <button className={speedButton} {...speedDown} aria-label="速度を下げる">
+                  −
+                </button>
+              </Tip>
+              <Tip text="速度を上げる">
+                <button className={speedButton} {...speedUp} aria-label="速度を上げる">
+                  +
+                </button>
+              </Tip>
+            </div>
+            {/* 本体に刻印したようなラベル */}
+            <span className="text-[10px] font-semibold tracking-[0.2em] text-zinc-500">SPEED</span>
           </div>
         </>
       }
