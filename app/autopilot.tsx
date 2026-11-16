@@ -34,6 +34,9 @@ type Props = {
   active: boolean;
   /** BOLT の向きの基準が変わるたびに増える番号。向き合わせの有効性の判定に使う */
   headingEpoch: number;
+  /** 自動操縦が ON か（シミュレーションの 1 分走行から止められるよう、親が持つ） */
+  enabled: boolean;
+  setEnabled: (v: boolean) => void;
   onStatus: (s: AutopilotStatus) => void;
   /** シミュレーションの世界（使っていなければ null を返す） */
   getSim: () => SimWorld | null;
@@ -69,13 +72,14 @@ export default function Autopilot({
   cameraRunning,
   active,
   headingEpoch,
+  enabled,
+  setEnabled,
   onStatus,
   getSim,
   onRunningChange,
   extra,
   children,
 }: Props) {
-  const [enabled, setEnabled] = useState(false);
   const [speed, setSpeed] = useState(40);
   const [threshold, setThreshold] = useState(0.7);
   const [log, setLog] = useState<string[]>([]);
@@ -116,11 +120,11 @@ export default function Autopilot({
   // 準備が崩れたら（切断・カメラ停止）自動操縦を解除する
   useEffect(() => {
     if (!ready && enabled) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setEnabled(false);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       addLog(active ? "BOLT かカメラが止まったので自動操縦を解除しました" : "画面を切り替えたので自動操縦を解除しました");
     }
-  }, [ready, enabled, active, addLog]);
+  }, [ready, enabled, active, addLog, setEnabled]);
 
   useEffect(() => {
     if (!enabled) {
@@ -160,7 +164,7 @@ export default function Autopilot({
   const toggle = useCallback(() => {
     addLog(enabled ? "自動操縦を解除" : "自動操縦を開始");
     setEnabled(!enabled);
-  }, [enabled, addLog]);
+  }, [enabled, addLog, setEnabled]);
 
   // キーボード: 矢印キー = 十字キー、Esc = 自動操縦を止める（自動操縦の画面が表示されている間だけ）
   useEffect(() => {
@@ -185,7 +189,7 @@ export default function Autopilot({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, enabled, addLog, adjustSpeed, adjustThreshold]);
+  }, [active, enabled, addLog, adjustSpeed, adjustThreshold, setEnabled]);
 
   return (
     <div className="flex flex-col gap-4">

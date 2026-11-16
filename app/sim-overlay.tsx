@@ -17,6 +17,8 @@ type Props = {
   world: SimWorld;
   /** 描く障害物（置いたり消したりしたら、親が新しい一覧を渡す） */
   obstacles: Obstacle[];
+  /** 1 分走行の終わる時刻（走行中でなければ null） */
+  deadline: number | null;
   /** 映像の上をクリックしたとき（座標は 0〜1 の比率） */
   onClick: (x: number, y: number) => void;
 };
@@ -25,13 +27,14 @@ type Props = {
  * シミュレーションの世界をカメラ映像に重ねて描く。
  * 障害物はクリックで置いたり消したりする。ゴーストと接触回数は、毎フレーム要素を直接書き換える。
  */
-export default function SimOverlay({ world, obstacles, onClick }: Props) {
+export default function SimOverlay({ world, obstacles, deadline, onClick }: Props) {
   const ghostRef = useRef<HTMLDivElement>(null);
   const arrowRef = useRef<HTMLDivElement>(null);
   const contactsRef = useRef<HTMLSpanElement>(null);
   const boltRef = useRef<HTMLDivElement>(null);
   const boltRingRef = useRef<HTMLDivElement>(null);
   const aheadRef = useRef<HTMLDivElement>(null);
+  const remainRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     let raf = 0;
@@ -60,6 +63,9 @@ export default function SimOverlay({ world, obstacles, onClick }: Props) {
         if (a) place(ahead, a.p.x, a.p.y, a.r);
       }
       if (contactsRef.current) contactsRef.current.textContent = String(world.contacts);
+      if (remainRef.current && deadline !== null) {
+        remainRef.current.textContent = String(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
+      }
       // シミュレーションが BOLT だと思っている位置と大きさ、その外側の「この輪に入ったら避ける」範囲
       const b = world.bolt();
       for (const [ref, extra] of [
@@ -75,7 +81,7 @@ export default function SimOverlay({ world, obstacles, onClick }: Props) {
     };
     tick();
     return () => cancelAnimationFrame(raf);
-  }, [world]);
+  }, [world, deadline]);
 
   return (
     <div
@@ -118,6 +124,11 @@ export default function SimOverlay({ world, obstacles, onClick }: Props) {
           <div className="absolute left-1/2 top-1/2 h-0.5 w-1/2 bg-fuchsia-100" />
         </div>
       </div>
+      {deadline !== null && (
+        <div className="pointer-events-none absolute right-3 top-3 rounded-md bg-cyan-600/85 px-3 py-2 text-sm font-semibold text-white">
+          記録中・残り <span ref={remainRef} /> 秒
+        </div>
+      )}
       <div className="pointer-events-none absolute bottom-2 right-3 flex gap-3 rounded bg-black/50 px-2 py-1 text-[10px] text-zinc-200">
         <span className="flex items-center gap-1">
           <span className="inline-block h-2.5 w-2.5 rounded-full border-2 border-orange-400" />

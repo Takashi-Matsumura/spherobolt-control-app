@@ -11,22 +11,32 @@ import {
   undoReflection,
 } from "@/lib/sim/notebook";
 import type { ReflectRequest, ReflectResponse, Reflection } from "@/lib/sim/reflection";
+import type { AutopilotState } from "@/lib/autopilot/types";
 import type { SimWorld } from "@/lib/sim/world";
 import type { LearningStatus } from "./learning-panel";
 
-/** これより短い走行は、材料が少なすぎるので振り返らない */
-const MIN_EPISODE_MS = 15_000;
+/** シミュレーションの 1 回の走行の長さ。毎回同じ長さにして、走行どうしを比べやすくする */
+export const RUN_MS = 60_000;
+/** 記録を始める状態（向き合わせや判定待ちの時間は、走行の長さに数えない） */
+const DRIVING_STATES: AutopilotState[] = ["moving", "returning", "avoiding"];
 /** 振り返りに渡す、過去の振り返りの数 */
 const HISTORY_FOR_PROMPT = 5;
 
 /**
  * 走行記録 → 振り返り → 回避の基準の更新 を受け持つ。
- * 自動操縦の開始・停止を onAutopilotRunning で知らせると、シミュレーション中の走行を記録し、止めたときに振り返る。
+ *
+ * シミュレーション中に自動操縦が走り始めたら（noteState で走行中の状態が来たら）記録を始め、
+ * RUN_MS たったら stopAutopilot で自動操縦を止めて振り返る。途中で止めた走行は長さが揃わないので振り返らない。
  */
-export function useLearning(world: SimWorld, simOnRef: { current: boolean }) {
+export function useLearning(world: SimWorld, simOnRef: { current: boolean }, stopAutopilot: () => void) {
   const [notebook, setNotebook] = useState<Notebook>(EMPTY_NOTEBOOK);
   const [status, setStatus] = useState<LearningStatus>({ kind: "idle" });
   const notebookRef = useRef(notebook);
+  /** 1 分走行の終わる時刻（記録していなければ null）。画面の残り時間の表示にも使う */
+  const [deadline, setDeadline] = useState<number | null>(null);
+  const deadlineRef = useRef<number | null>(null);
+  const runningRef = useRef(false);
+  const completedRef = useRef(false);
 
   /** 記録を差し替える: 回避の基準を世界に反映し、save なら保存もする */
   const commit = useCallback(
@@ -94,24 +104,52 @@ export function useLearning(world: SimWorld, simOnRef: { current: boolean }) {
     [commit],
   );
 
+  const setRunDeadline = (d: number | null) => {
+    deadlineRef.current = d;
+    setDeadline(d);
+  };
+
+  /** 自動操縦の状態が変わるたびに呼ぶ。走り始めたら 1 分走行の記録を始める */
+  const noteState = useCallback(
+    (state: AutopilotState) => {
+      if (!runningRef.current || !simOnRef.current || world.recorder.recording) return;
+      if (!DRIVING_STATES.includes(state)) return;
+      world.recorder.begin(world.policy, world.ghostYields);
+      completedRef.current = false;
+      setRunDeadline(Date.now() + RUN_MS);
+      setStatus({ kind: "info", message: `1 分間の走行を記録しています（終わると自動で止まり、振り返ります）。` });
+    },
+    [world, simOnRef],
+  );
+
+  // 1 分たったら自動操縦を止める（止まったら onAutopilotRunning(false) で振り返る）
+  useEffect(() => {
+    if (deadline === null) return;
+    const timer = setTimeout(() => {
+      completedRef.current = true;
+      stopAutopilot();
+    }, Math.max(0, deadline - Date.now()));
+    return () => clearTimeout(timer);
+  }, [deadline, stopAutopilot]);
+
   const onAutopilotRunning = useCallback(
     (running: boolean) => {
-      if (running) {
-        if (simOnRef.current) world.recorder.begin(world.policy, world.ghostYields);
-        return;
-      }
+      runningRef.current = running;
+      if (running) return;
+      setRunDeadline(null);
       const ep = world.recorder.end();
       if (!ep) return;
-      if (ep.durationMs < MIN_EPISODE_MS) {
+      if (!completedRef.current) {
         setStatus({
           kind: "info",
-          message: `走行が ${MIN_EPISODE_MS / 1000} 秒より短かったので、振り返りませんでした。`,
+          message: `1 分たつ前に止まったので、この走行は振り返りませんでした（走行の長さを揃えるため）。`,
         });
         return;
       }
+      completedRef.current = false;
       void reflect(ep);
     },
-    [world, simOnRef, reflect],
+    [world, reflect],
   );
 
   const undo = useCallback(() => {
@@ -130,5 +168,5 @@ export function useLearning(world: SimWorld, simOnRef: { current: boolean }) {
     });
   }, [commit]);
 
-  return { notebook, status, onAutopilotRunning, undo, reset };
+  return { notebook, status, deadline, noteState, onAutopilotRunning, undo, reset };
 }

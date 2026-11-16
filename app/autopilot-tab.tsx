@@ -73,6 +73,9 @@ export default function AutopilotTab({ boltRef, connected, active, headingEpoch 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [cameraRunning, setCameraRunning] = useState(false);
   const [status, setStatus] = useState<AutopilotStatus>(OFF_STATUS);
+  const [enabled, setEnabled] = useState(false);
+  const stopAutopilot = useCallback(() => setEnabled(false), []);
+  const ready = connected && cameraRunning && active;
 
   // シミュレーション: 映像の上に仮想の障害物とゴーストを置き、自動操縦の BOLT に避けさせる
   const [world] = useState(() => new SimWorld());
@@ -89,7 +92,24 @@ export default function AutopilotTab({ boltRef, connected, active, headingEpoch 
   }, [simOn, world]);
   const getSim = useCallback(() => (simOnRef.current ? world : null), [world]);
   // 走行記録と振り返り（自動操縦を止めるたびに、ローカルの AI が回避の基準を見直す）
-  const learning = useLearning(world, simOnRef);
+  // シミュレーション中は 1 分ごとに区切って記録する
+  const learning = useLearning(world, simOnRef, stopAutopilot);
+  const { noteState } = learning;
+  const handleStatus = useCallback(
+    (s: AutopilotStatus) => {
+      setStatus(s);
+      noteState(s.state);
+    },
+    [noteState],
+  );
+  /** シミュレーションの ON/OFF。ON にしたら、準備ができていればすぐに 1 分間の走行を始める */
+  const toggleSim = () => {
+    const next = !simOn;
+    setSimOn(next);
+    if (next && ready && !enabled) setEnabled(true);
+    // 1 分走行の途中で OFF にしたら、自動操縦も止める（その走行は振り返らない）
+    if (!next && world.recorder.recording) setEnabled(false);
+  };
   const toggleObstacle = useCallback(
     (x: number, y: number) => {
       world.toggleObstacleAt({ x, y });
@@ -101,7 +121,9 @@ export default function AutopilotTab({ boltRef, connected, active, headingEpoch 
   const track = status.track;
   const showBox = track && status.visible !== null && status.visible >= 0.5;
   const m = status.edgeMargin;
-  const simOverlay = simOn && <SimOverlay world={world} obstacles={obstacles} onClick={toggleObstacle} />;
+  const simOverlay = simOn && (
+    <SimOverlay world={world} obstacles={obstacles} deadline={learning.deadline} onClick={toggleObstacle} />
+  );
   const overlay =
     status.state === "off" ? (
       simOverlay
@@ -158,7 +180,9 @@ export default function AutopilotTab({ boltRef, connected, active, headingEpoch 
       cameraRunning={cameraRunning}
       active={active}
       headingEpoch={headingEpoch}
-      onStatus={setStatus}
+      enabled={enabled}
+      setEnabled={setEnabled}
+      onStatus={handleStatus}
       getSim={getSim}
       onRunningChange={learning.onAutopilotRunning}
       extra={
@@ -167,7 +191,8 @@ export default function AutopilotTab({ boltRef, connected, active, headingEpoch 
             <button
               className={`${PILL_BUTTON} ${simOn ? "text-cyan-300" : ""}`}
               aria-pressed={simOn}
-              onClick={() => setSimOn((v) => !v)}
+              title="ON にすると、1 分間だけ自動操縦を走らせ、止まったら振り返ります（A ボタンでもう 1 回）"
+              onClick={toggleSim}
             >
               シミュレーション {simOn ? "ON" : "OFF"}
             </button>
@@ -197,7 +222,9 @@ export default function AutopilotTab({ boltRef, connected, active, headingEpoch 
                   ゴーストは BOLT を{ghostYields ? "よける" : "よけない"}
                 </button>
                 <span className="text-zinc-500">
-                  映像をクリックすると、仮想の障害物を置けます（もう一度クリックで消す）
+                  {ready
+                    ? "1 回の走行は 1 分間です（A ボタンでもう 1 回）。映像をクリックすると、仮想の障害物を置けます"
+                    : "BOLT の接続とカメラの開始のあと、A ボタンで 1 分間の走行を始めます"}
                 </span>
               </>
             )}
