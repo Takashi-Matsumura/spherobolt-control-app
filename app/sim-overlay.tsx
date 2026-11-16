@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { AVOID_CLEARANCE } from "@/lib/autopilot/controller";
 import { ASPECT, type Obstacle, type SimWorld } from "@/lib/sim/world";
 
 const pct = (v: number) => `${(v * 100).toFixed(2)}%`;
@@ -29,6 +30,8 @@ export default function SimOverlay({ world, obstacles, onClick }: Props) {
   const ghostRef = useRef<HTMLDivElement>(null);
   const arrowRef = useRef<HTMLDivElement>(null);
   const contactsRef = useRef<HTMLSpanElement>(null);
+  const boltRef = useRef<HTMLDivElement>(null);
+  const boltRingRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let raf = 0;
@@ -45,6 +48,17 @@ export default function SimOverlay({ world, obstacles, onClick }: Props) {
       }
       if (arrowRef.current && g) arrowRef.current.style.transform = `rotate(${g.angle}deg)`;
       if (contactsRef.current) contactsRef.current.textContent = String(world.contacts);
+      // シミュレーションが BOLT だと思っている位置と大きさ、その外側の「この輪に入ったら避ける」範囲
+      const b = world.bolt();
+      for (const [ref, extra] of [
+        [boltRef, 0],
+        [boltRingRef, AVOID_CLEARANCE],
+      ] as const) {
+        const e = ref.current;
+        if (!e) continue;
+        e.style.display = b ? "" : "none";
+        if (b) place(e, b.p.x, b.p.y, b.r + extra);
+      }
       raf = requestAnimationFrame(tick);
     };
     tick();
@@ -73,6 +87,9 @@ export default function SimOverlay({ world, obstacles, onClick }: Props) {
           }}
         />
       ))}
+      {/* シミュレーションの中の BOLT（実線）と、障害物やゴーストの縁がここに入ったら避ける範囲（点線） */}
+      <div ref={boltRef} className="pointer-events-none absolute rounded-full border-2 border-sky-300" />
+      <div ref={boltRingRef} className="pointer-events-none absolute rounded-full border border-dashed border-sky-300/70" />
       {/* ゴースト（仮想の Sphero Mini）。中の線は進む向き */}
       <div
         ref={ghostRef}
@@ -90,6 +107,10 @@ export default function SimOverlay({ world, obstacles, onClick }: Props) {
         <span className="flex items-center gap-1">
           <span className="inline-block h-2.5 w-2.5 rounded-full border-2 border-fuchsia-300" />
           ゴースト
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-2.5 w-2.5 rounded-full border-2 border-sky-300" />
+          BOLT（避ける範囲は点線）
         </span>
         <span>
           接触 <span ref={contactsRef}>0</span> 回

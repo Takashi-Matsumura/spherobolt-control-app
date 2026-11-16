@@ -44,7 +44,7 @@ export const EDGE_MARGIN = 0.2;
 /** 引き返しは、端からこの割合より内側に戻るまで続ける（行ったり来たりを防ぐ） */
 const RETURN_UNTIL_MARGIN = 0.35;
 /** シミュレーション: 障害物・ゴーストとの隙間がこれより狭くなったら避ける（映像の高さを 1 とした単位） */
-const AVOID_CLEARANCE = 0.12;
+export const AVOID_CLEARANCE = 0.12;
 /** 避け始めたら、隙間がこの倍率まで広がるまで避け続ける（行ったり来たりを防ぐ） */
 const AVOID_UNTIL_FACTOR = 1.5;
 /** Box の確信度がこれ未満なら、位置は当てにしない */

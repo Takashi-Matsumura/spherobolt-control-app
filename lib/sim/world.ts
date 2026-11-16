@@ -55,6 +55,8 @@ export class SimWorld {
   ghost: Ghost | null = null;
   /** BOLT とゴースト・障害物がぶつかった回数（重なり始めた回数） */
   contacts = 0;
+  /** ゴーストが BOLT を避けるか。false なら障害物だけ避け、BOLT には構わず進む（BOLT の回避を試すとき用） */
+  ghostYields = false;
 
   private boltTrack: Track | null = null;
   private touching = new Set<string>();
@@ -77,6 +79,10 @@ export class SimWorld {
   /** BOLT がぶつからないようにすべき相手（障害物とゴースト） */
   bodiesForBolt(): Body[] {
     return this.ghost ? [...this.obstacles, this.ghost] : [...this.obstacles];
+  }
+
+  setGhostYields(v: boolean) {
+    this.ghostYields = v;
   }
 
   /** p に障害物があれば消し、なければ置く。置いたら true */
@@ -150,7 +156,7 @@ export class SimWorld {
     }
     // 行きたい向き: 端に近ければ中央、そうでなければ気ままな向き
     const goal = isNearEdge(g.p, GHOST_EDGE_MARGIN) ? imageAngle(g.p, { x: 0.5, y: 0.5 }, ASPECT) : g.wander;
-    const others = bolt ? [...this.obstacles, bolt] : this.obstacles;
+    const others = bolt && this.ghostYields ? [...this.obstacles, bolt] : this.obstacles;
     // 避け始めたら、隙間が少し広がるまで避け続ける（行ったり来たりを防ぐ）
     const rep: Repulsion | null = repulsion(g, others, ASPECT, GHOST_CLEARANCE * (g.avoiding ? 1.5 : 1));
     g.avoiding = rep !== null;

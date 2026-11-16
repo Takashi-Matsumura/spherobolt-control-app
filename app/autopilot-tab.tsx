@@ -75,6 +75,7 @@ export default function AutopilotTab({ boltRef, connected, active, headingEpoch 
   // シミュレーション: 映像の上に仮想の障害物とゴーストを置き、自動操縦の BOLT に避けさせる
   const [world] = useState(() => new SimWorld());
   const [simOn, setSimOn] = useState(false);
+  const [ghostYields, setGhostYields] = useState(world.ghostYields);
   // 描くための障害物の一覧（世界は置き直すたびに新しい配列にするので、それを受け取る）
   const [obstacles, setObstacles] = useState(world.obstacles);
   const simOnRef = useRef(simOn);
@@ -177,6 +178,17 @@ export default function AutopilotTab({ boltRef, connected, active, headingEpoch 
               </button>
               <button className={PILL_BUTTON} onClick={() => world.placeGhost()}>
                 ゴーストを置き直す
+              </button>
+              <button
+                className={PILL_BUTTON}
+                aria-pressed={ghostYields}
+                title="「よけない」にすると、ゴーストは BOLT に構わず進むので、BOLT が避けるかを確かめやすくなります"
+                onClick={() => {
+                  world.setGhostYields(!ghostYields);
+                  setGhostYields(!ghostYields);
+                }}
+              >
+                ゴーストは BOLT を{ghostYields ? "よける" : "よけない"}
               </button>
               <span className="text-zinc-500">映像をクリックすると、仮想の障害物を置けます（もう一度クリックで消す）</span>
             </>
