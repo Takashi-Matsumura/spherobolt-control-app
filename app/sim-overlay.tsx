@@ -2,6 +2,8 @@
 
 import { useEffect, useRef } from "react";
 import { ASPECT, type Obstacle, type SimWorld } from "@/lib/sim/world";
+import RunProgress from "./run-progress";
+import { RUN_MS } from "./use-learning";
 
 const pct = (v: number) => `${(v * 100).toFixed(2)}%`;
 
@@ -124,6 +126,7 @@ export default function SimOverlay({ world, obstacles, deadline, onClick }: Prop
           <div className="absolute left-1/2 top-1/2 h-0.5 w-1/2 bg-fuchsia-100" />
         </div>
       </div>
+      <RunProgress deadline={deadline} runMs={RUN_MS} preparing={false} reflecting={false} compact />
       {deadline !== null && (
         <div className="pointer-events-none absolute right-3 top-3 rounded-md bg-cyan-600/85 px-3 py-2 text-sm font-semibold text-white">
           記録中・残り <span ref={remainRef} /> 秒

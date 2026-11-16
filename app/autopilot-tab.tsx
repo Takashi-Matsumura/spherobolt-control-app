@@ -10,8 +10,9 @@ import Autopilot from "./autopilot";
 import CameraView from "./camera-view";
 import { PILL_BUTTON } from "./handheld/controls";
 import LearningPanel from "./learning-panel";
+import RunProgress from "./run-progress";
 import SimOverlay from "./sim-overlay";
-import { useLearning } from "./use-learning";
+import { RUN_MS, useLearning } from "./use-learning";
 
 const STATE_STYLE: Record<AutopilotState, string> = {
   off: "",
@@ -229,6 +230,14 @@ export default function AutopilotTab({ boltRef, connected, active, headingEpoch 
               </>
             )}
           </div>
+          {simOn && (
+            <RunProgress
+              deadline={learning.deadline}
+              runMs={RUN_MS}
+              preparing={enabled && learning.deadline === null}
+              reflecting={learning.status.kind === "reflecting"}
+            />
+          )}
           <LearningPanel
             notebook={learning.notebook}
             status={learning.status}
