@@ -3,7 +3,7 @@
 import type { Box } from "@/lib/vision/types";
 import type { Segment } from "./tracker";
 
-export type AutopilotState = "off" | "waiting" | "calibrating" | "moving" | "returning" | "stopped";
+export type AutopilotState = "off" | "waiting" | "calibrating" | "moving" | "returning" | "avoiding" | "stopped";
 
 /** 判定した位置と、そこから現在地を予測するための材料 */
 export type Track = {

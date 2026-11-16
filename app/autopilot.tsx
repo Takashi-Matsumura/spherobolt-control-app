@@ -5,6 +5,7 @@ import type { Bolt } from "@/lib/bolt/bolt";
 import { OFF_STATUS, startAutopilot } from "@/lib/autopilot/controller";
 import type { Calibration } from "@/lib/autopilot/geometry";
 import type { AutopilotStatus } from "@/lib/autopilot/types";
+import type { SimWorld } from "@/lib/sim/world";
 import {
   ActionButton,
   ChevronIcon,
@@ -33,7 +34,16 @@ type Props = {
   active: boolean;
   /** BOLT の向きの基準が変わるたびに増える番号。向き合わせの有効性の判定に使う */
   headingEpoch: number;
+  /** 自動操縦が ON か（シミュレーションの 1 分走行から止められるよう、親が持つ） */
+  enabled: boolean;
+  setEnabled: (v: boolean) => void;
   onStatus: (s: AutopilotStatus) => void;
+  /** シミュレーションの世界（使っていなければ null を返す） */
+  getSim: () => SimWorld | null;
+  /** 自動操縦が始まった・止まったとき（走行記録の区切りに使う） */
+  onRunningChange?: (running: boolean) => void;
+  /** 本体の下に置く操作（シミュレーションの切り替えなど） */
+  extra?: React.ReactNode;
   /** 中央に置くカメラ映像 */
   children: React.ReactNode;
 };
@@ -62,10 +72,14 @@ export default function Autopilot({
   cameraRunning,
   active,
   headingEpoch,
+  enabled,
+  setEnabled,
   onStatus,
+  getSim,
+  onRunningChange,
+  extra,
   children,
 }: Props) {
-  const [enabled, setEnabled] = useState(false);
   const [speed, setSpeed] = useState(40);
   const [threshold, setThreshold] = useState(0.7);
   const [log, setLog] = useState<string[]>([]);
@@ -106,18 +120,19 @@ export default function Autopilot({
   // 準備が崩れたら（切断・カメラ停止）自動操縦を解除する
   useEffect(() => {
     if (!ready && enabled) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setEnabled(false);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       addLog(active ? "BOLT かカメラが止まったので自動操縦を解除しました" : "画面を切り替えたので自動操縦を解除しました");
     }
-  }, [ready, enabled, active, addLog]);
+  }, [ready, enabled, active, addLog, setEnabled]);
 
   useEffect(() => {
     if (!enabled) {
       onStatus(OFF_STATUS);
       return;
     }
-    return startAutopilot({
+    onRunningChange?.(true);
+    const stop = startAutopilot({
       getBolt: () => boltRef.current,
       getVideo: () => videoRef.current,
       speed: speedRef,
@@ -127,8 +142,13 @@ export default function Autopilot({
       saveCalibration,
       onStatus,
       log: addLog,
+      getSim,
     });
-  }, [enabled, boltRef, videoRef, onStatus, addLog, saveCalibration]);
+    return () => {
+      stop();
+      onRunningChange?.(false);
+    };
+  }, [enabled, boltRef, videoRef, onStatus, addLog, saveCalibration, getSim, onRunningChange]);
 
   const adjustSpeed = useCallback(
     (d: number) => setSpeed((v) => Math.min(SPEED_MAX, Math.max(SPEED_MIN, v + d))),
@@ -144,7 +164,7 @@ export default function Autopilot({
   const toggle = useCallback(() => {
     addLog(enabled ? "自動操縦を解除" : "自動操縦を開始");
     setEnabled(!enabled);
-  }, [enabled, addLog]);
+  }, [enabled, addLog, setEnabled]);
 
   // キーボード: 矢印キー = 十字キー、Esc = 自動操縦を止める（自動操縦の画面が表示されている間だけ）
   useEffect(() => {
@@ -169,7 +189,7 @@ export default function Autopilot({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, enabled, addLog, adjustSpeed, adjustThreshold]);
+  }, [active, enabled, addLog, adjustSpeed, adjustThreshold, setEnabled]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -248,6 +268,8 @@ export default function Autopilot({
       >
         {children}
       </HandheldShell>
+
+      {extra}
 
       {/* 本体の下: ログと説明 */}
       <details className="rounded-lg border border-zinc-300 p-3 dark:border-zinc-700" open>

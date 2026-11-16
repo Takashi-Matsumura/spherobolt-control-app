@@ -2,6 +2,7 @@
 // API キーはサーバ側（TYPESAFE_API_KEY）だけで扱い、ブラウザには渡さない。
 // 仕様: https://docs.typesafe.ai/api, https://docs.typesafe.ai/images.md, https://docs.typesafe.ai/primitives/noul.md
 
+import { isSameOrigin, readBodyLimited } from "@/lib/server/request";
 import type { Box, VisionResult } from "@/lib/vision/types";
 
 const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
@@ -25,27 +26,6 @@ function rateLimited(): boolean {
   return false;
 }
 
-/** 上限を超えた時点で読むのをやめる（巨大なボディを全部メモリに載せない） */
-async function readBodyLimited(request: Request, limit: number): Promise<string | null> {
-  const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > limit) return null;
-  if (!request.body) return "";
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > limit) {
-      await reader.cancel();
-      return null;
-    }
-    chunks.push(value);
-  }
-  return new TextDecoder().decode(Buffer.concat(chunks));
-}
-
 function parseBox(answer: unknown): Box | null {
   const a = answer as { box?: Record<string, unknown>; confidence?: unknown } | undefined;
   const b = a?.box;
@@ -66,10 +46,7 @@ export async function POST(request: Request) {
   // 他サイトのページ（ブラウザ）からこの API を呼ばれて課金されないよう、同一オリジンからの呼び出しだけ受け付ける。
   // ただし Origin / Host は curl などでは偽装できるため、認証の代わりにはならない。
   // ローカル利用が前提で、外部に公開する場合は認証を追加すること（README 参照）。
-  const origin = request.headers.get("origin");
-  if (!origin || !URL.canParse(origin) || new URL(origin).host !== request.headers.get("host")) {
-    return fail("forbidden", 403);
-  }
+  if (!isSameOrigin(request)) return fail("forbidden", 403);
 
   const apiKey = process.env.TYPESAFE_API_KEY;
   if (!apiKey) return fail("TYPESAFE_API_KEY が設定されていません（.env.local を確認してください）", 500);
