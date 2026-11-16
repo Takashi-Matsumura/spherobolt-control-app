@@ -64,7 +64,10 @@ export default function SimOverlay({ world, obstacles, deadline, onClick }: Prop
         ahead.style.display = a ? "" : "none";
         if (a) place(ahead, a.p.x, a.p.y, a.r);
       }
-      if (contactsRef.current) contactsRef.current.textContent = String(world.contacts);
+      if (contactsRef.current) {
+        contactsRef.current.textContent =
+          String(world.contacts) + (world.jumpContacts ? `（位置補正 ${world.jumpContacts}）` : "");
+      }
       if (remainRef.current && deadline !== null) {
         remainRef.current.textContent = String(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
       }

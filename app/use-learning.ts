@@ -66,6 +66,7 @@ export function useLearning(world: SimWorld, simOnRef: { current: boolean }, sto
       const body: ReflectRequest = {
         episode,
         criteria: nb.criteria,
+        runs: nb.history.map((h) => ({ metrics: h.metrics, policy: h.policyBefore })),
         history: nb.history.slice(0, HISTORY_FOR_PROMPT).map(({ metrics, lessons, changes, expectation }) => ({
           metrics,
           lessons,
@@ -92,7 +93,9 @@ export function useLearning(world: SimWorld, simOnRef: { current: boolean }, sto
         commit(addReflection(notebookRef.current, reflection));
         setStatus({
           kind: "info",
-          message: `振り返りました。数値の変更 ${reflection.changes.length} 件を次の走行から使います。`,
+          message: reflection.verdict?.reverted
+            ? "振り返りました。最良より明らかに接触が多かったので、最良のときの設定に戻しました。"
+            : `振り返りました。数値の変更 ${reflection.changes.length} 件を次の走行から使います。`,
         });
       } catch (e) {
         setStatus({
@@ -125,10 +128,13 @@ export function useLearning(world: SimWorld, simOnRef: { current: boolean }, sto
   // 1 分たったら自動操縦を止める（止まったら onAutopilotRunning(false) で振り返る）
   useEffect(() => {
     if (deadline === null) return;
-    const timer = setTimeout(() => {
-      completedRef.current = true;
-      stopAutopilot();
-    }, Math.max(0, deadline - Date.now()));
+    const timer = setTimeout(
+      () => {
+        completedRef.current = true;
+        stopAutopilot();
+      },
+      Math.max(0, deadline - Date.now()),
+    );
     return () => clearTimeout(timer);
   }, [deadline, stopAutopilot]);
 

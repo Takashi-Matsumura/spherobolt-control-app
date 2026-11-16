@@ -1,5 +1,6 @@
 "use client";
 
+import type { VerdictKind } from "@/lib/sim/compare";
 import type { Notebook } from "@/lib/sim/notebook";
 import { DEFAULT_POLICY, POLICY_KEYS, POLICY_SPEC } from "@/lib/sim/policy";
 import { PILL_BUTTON } from "./handheld/controls";
@@ -14,6 +15,19 @@ type Props = {
   status: LearningStatus;
   onUndo: () => void;
   onReset: () => void;
+};
+
+const VERDICT_LABEL: Record<VerdictKind, string> = {
+  first: "最初",
+  improved: "改善",
+  worse: "悪化",
+  unclear: "誤差",
+};
+const VERDICT_STYLE: Record<VerdictKind, string> = {
+  first: "text-zinc-500",
+  improved: "text-emerald-600 dark:text-emerald-400",
+  worse: "text-red-500",
+  unclear: "text-zinc-500",
 };
 
 const fmt = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(3).replace(/0+$/, ""));
@@ -104,6 +118,20 @@ export default function LearningPanel({ notebook, status, onUndo, onReset }: Pro
                 })}
                 ・{latest.model}・{Math.round(latest.latencyMs / 1000)} 秒）
               </h4>
+              {latest.verdict && (
+                <div>
+                  <h4 className="text-xs font-semibold text-zinc-500">前回・最良との比較（アプリの判定）</h4>
+                  <p className="mt-1 text-sm">
+                    <span className={`font-semibold ${VERDICT_STYLE[latest.verdict.kind]}`}>
+                      {VERDICT_LABEL[latest.verdict.kind]}
+                    </span>
+                    {latest.verdict.reverted && (
+                      <span className="font-semibold text-amber-500"> ・最良の設定に戻した</span>
+                    )}
+                    <span className="text-zinc-500">　{latest.verdict.text}</span>
+                  </p>
+                </div>
+              )}
               <List title="気づいたこと" items={latest.observations} />
               <List title="教訓" items={latest.lessons} />
               <div>
@@ -141,12 +169,16 @@ export default function LearningPanel({ notebook, status, onUndo, onReset }: Pro
                 <th className="py-1 text-left font-normal">回</th>
                 <th className="py-1 font-normal">時間</th>
                 <th className="py-1 font-normal">接触</th>
+                <th className="py-1 font-normal" title="位置補正による接触（予測のずれ。評価には使わない）">
+                  補正
+                </th>
                 <th className="py-1 font-normal">接触/分</th>
                 <th className="py-1 font-normal">気づく前</th>
                 <th className="py-1 font-normal">回避中</th>
                 <th className="py-1 font-normal">回避</th>
                 <th className="py-1 font-normal">ニアミス</th>
                 <th className="py-1 font-normal">変更</th>
+                <th className="py-1 font-normal">判定</th>
               </tr>
             </thead>
             <tbody className="font-mono">
@@ -155,12 +187,16 @@ export default function LearningPanel({ notebook, status, onUndo, onReset }: Pro
                   <td className="py-1 text-left">{notebook.history.length - i}</td>
                   <td className="py-1">{h.metrics.durationS}s</td>
                   <td className="py-1">{h.metrics.contacts}</td>
+                  <td className="py-1 text-zinc-500">{h.metrics.contactsJump ?? "-"}</td>
                   <td className="py-1">{h.metrics.contactsPerMin}</td>
                   <td className="py-1">{h.metrics.contactsUnaware}</td>
                   <td className="py-1">{h.metrics.contactsWhileAvoiding}</td>
                   <td className="py-1">{h.metrics.avoids}</td>
                   <td className="py-1">{h.metrics.nearMisses}</td>
                   <td className="py-1">{h.changes.length}</td>
+                  <td className={`py-1 ${h.verdict ? VERDICT_STYLE[h.verdict.kind] : ""}`}>
+                    {h.verdict ? VERDICT_LABEL[h.verdict.kind] + (h.verdict.reverted ? "・戻" : "") : "-"}
+                  </td>
                 </tr>
               ))}
             </tbody>

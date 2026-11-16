@@ -1,6 +1,7 @@
 // 振り返り: 走行記録を AI に読ませ、教訓と「判断の基準」を言葉にし、回避の基準（数値）を見直す。
 // 型と、サーバ・ブラウザ間でやりとりする形をここにまとめる。
 
+import type { RunSummary, Verdict } from "./compare";
 import type { Episode, EpisodeMetrics } from "./episode";
 import type { AvoidPolicy, PolicyKey } from "./policy";
 
@@ -25,6 +26,8 @@ export type Reflection = {
   changes: PolicyChange[];
   /** 次の走行で期待すること */
   expectation: string;
+  /** 前回・最良との比較（アプリが計算）。古い記録には無い */
+  verdict?: Verdict;
   policyBefore: AvoidPolicy;
   policyAfter: AvoidPolicy;
   model: string;
@@ -38,6 +41,8 @@ export type ReflectRequest = {
   episode: Episode;
   criteria: string[];
   history: PastReflection[];
+  /** これまでの走行（新しい順、前回と最良との比較に使う） */
+  runs: RunSummary[];
 };
 
 export type ReflectResponse =

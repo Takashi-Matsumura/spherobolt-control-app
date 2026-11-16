@@ -2,7 +2,8 @@
 // 気づき・教訓・判断の基準を言葉にさせ、回避の基準（数値）を見直させる。
 // 接続先は環境変数 LOCAL_LLM_URL（既定は http://127.0.0.1:8080）。ブラウザからは指定できない。
 
-import { type Episode, metricsOf } from "@/lib/sim/episode";
+import { type RunSummary, type Verdict, compareRuns } from "@/lib/sim/compare";
+import { type Episode, type EpisodeMetrics, metricsOf } from "@/lib/sim/episode";
 import { type AvoidPolicy, POLICY_KEYS, POLICY_SPEC, type PolicyKey, clampPolicy } from "@/lib/sim/policy";
 import type { PastReflection, PolicyChange, ReflectRequest, ReflectResponse } from "@/lib/sim/reflection";
 import { isSameOrigin, readBodyLimited } from "@/lib/server/request";
@@ -27,21 +28,25 @@ function fail(error: string, status: number) {
 
 const fmt = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(3));
 
-function buildPrompt(ep: Episode, criteria: string[], history: PastReflection[]): string {
+function buildPrompt(ep: Episode, criteria: string[], history: PastReflection[], verdict: Verdict): string {
   const m = metricsOf(ep);
   const params = POLICY_KEYS.map(
     (k) =>
       `- ${k}（${POLICY_SPEC[k].label}）= ${fmt(ep.policy[k])}　範囲 ${POLICY_SPEC[k].min}〜${POLICY_SPEC[k].max}。${POLICY_SPEC[k].description}`,
   ).join("\n");
-  const contacts = ep.contacts.slice(-MAX_EVENTS).map((c) => ({
-    経過秒: +(c.t / 1000).toFixed(1),
-    相手: c.with,
-    BOLTの状態: c.boltState,
-    避け始めてからms: c.avoidingForMs,
-    最後の判定からms: c.sinceJudgmentMs,
-    判定の応答ms: c.latencyMs,
-    ゴーストの向きとBOLTへの向きの差_度: c.ghostHeadingOffBolt,
-  }));
+  // 位置補正による接触は回避の仕方では防げないので、AI には件数だけ伝える
+  const contacts = ep.contacts
+    .filter((c) => !c.jump)
+    .slice(-MAX_EVENTS)
+    .map((c) => ({
+      経過秒: +(c.t / 1000).toFixed(1),
+      相手: c.with,
+      BOLTの状態: c.boltState,
+      避け始めてからms: c.avoidingForMs,
+      最後の判定からms: c.sinceJudgmentMs,
+      判定の応答ms: c.latencyMs,
+      ゴーストの向きとBOLTへの向きの差_度: c.ghostHeadingOffBolt,
+    }));
   const avoids = ep.avoids.slice(-MAX_EVENTS).map((a) => ({
     経過秒: +(a.t / 1000).toFixed(1),
     相手: a.with,
@@ -74,7 +79,8 @@ ${params}
 ## 今回の走行（${m.durationS} 秒）
 - 接触 ${m.contacts} 回（${m.contactsPerMin} 回/分）
   - 避けていない状態での接触（気づくのが遅れた）: ${m.contactsUnaware} 回
-  - 避けている最中の接触（避け方が足りなかった）: ${m.contactsWhileAvoiding} 回
+  - 避けている最中の接触: ${m.contactsWhileAvoiding} 回。避け始める隙間を広げると回避中の時間が長くなり、この数は増えやすくなる点に注意
+- 位置補正による接触（上の接触数には含めない）: ${m.contactsJump ?? 0} 回。新しい判定で BOLT の位置が飛んだ結果の重なりで、予測のずれが原因。回避の数値では防げない
 - 回避 ${m.avoids} 回、そのうちニアミス（接触はしなかったが隙間 0.03 未満）${m.nearMisses} 回
 - 判定 ${ep.judgments} 回、平均の応答 ${m.avgLatencyMs ?? "不明"} ms
 
@@ -83,6 +89,10 @@ ${JSON.stringify(contacts)}
 
 回避の記録:
 ${JSON.stringify(avoids)}
+
+## 前回・最良との比較（アプリが計算した判定）
+${verdict.text}
+接触の回数は偶然でも揺れるので、「ばらつきの範囲内」の差は変更の効果とはみなさないこと。
 
 ## これまでの振り返り（新しい順）
 ${past}
@@ -94,7 +104,11 @@ ${criteria.length ? criteria.map((c) => `- ${c}`).join("\n") : "（まだあり�
 1. 記録から読み取れることを observations に書く（1〜4 個）。数字を根拠にする。
 2. 今回の教訓を lessons に書く（1〜3 個）。
 3. これまでの判断の基準を見直し、次から守る基準を criteria に書き直す（最大 5 個）。前回の変更で良くなったか悪くなったかも考える。
-4. 数値の変更を changes に書く（0〜${MAX_CHANGES} 個）。1 回で大きく変えすぎない。悪くなった変更は戻してもよい。理由も書く。
+${
+  verdict.reverted
+    ? "4. 今回はアプリが最良の設定に戻すので、changes は空にする。"
+    : `4. 数値の変更を changes に書く（0〜${MAX_CHANGES} 個）。1 回で大きく変えすぎない。比較の判定をもとに、悪くなった変更は戻し、差がばらつきの範囲内なら変えずにもう一度試すことも選べる。数値は下げてもよい。理由も書く。`
+}
 5. 次の走行で期待することを expectation に 1 文で書く。
 すべて日本語で、短く具体的に書く。`;
 }
@@ -175,6 +189,33 @@ function applyChanges(policy: AvoidPolicy, raw: unknown): { policy: AvoidPolicy;
   return { policy: next, changes };
 }
 
+/** ブラウザから届いた過去の走行を、比較に使える形だけ残す */
+function sanitizeRuns(raw: unknown): RunSummary[] {
+  if (!Array.isArray(raw)) return [];
+  const out: RunSummary[] = [];
+  for (const r of raw.slice(0, 30) as { metrics?: Partial<EpisodeMetrics>; policy?: unknown }[]) {
+    const m = r?.metrics;
+    if (!m || typeof m.contactsPerMin !== "number" || typeof m.durationS !== "number") continue;
+    out.push({ metrics: m as EpisodeMetrics, policy: clampPolicy((r.policy ?? {}) as Record<string, unknown>) });
+  }
+  return out;
+}
+
+/** from から to への変更を、PolicyChange の一覧にする */
+function revertTo(
+  from: AvoidPolicy,
+  to: AvoidPolicy,
+  reason: string,
+): { policy: AvoidPolicy; changes: PolicyChange[] } {
+  const changes = POLICY_KEYS.filter((k) => Math.abs(from[k] - to[k]) > 1e-9).map((k) => ({
+    param: k,
+    from: from[k],
+    to: to[k],
+    reason,
+  }));
+  return { policy: { ...to }, changes };
+}
+
 export async function POST(request: Request) {
   // ローカル利用が前提。他サイトのページから呼ばれないよう、同一オリジンだけ受け付ける
   if (!isSameOrigin(request)) return fail("forbidden", 403);
@@ -195,6 +236,9 @@ export async function POST(request: Request) {
   ep.policy = clampPolicy(ep.policy ?? {});
   const criteria = strings(req.criteria, 5);
   const history = Array.isArray(req.history) ? req.history.slice(0, 5) : [];
+  const runs = sanitizeRuns(req.runs);
+  const current: RunSummary = { metrics: metricsOf(ep), policy: ep.policy };
+  const { verdict, best } = compareRuns(current, runs);
 
   busy = true;
   const started = Date.now();
@@ -205,7 +249,7 @@ export async function POST(request: Request) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: [{ role: "user", content: buildPrompt(ep, criteria, history) }],
+          messages: [{ role: "user", content: buildPrompt(ep, criteria, history, verdict) }],
           temperature: 0.4,
           max_tokens: 2000,
           // gemma4 などの「考えてから答える」モデルは、考える部分で時間を使い切らないように切る
@@ -235,7 +279,10 @@ export async function POST(request: Request) {
     } catch {
       return fail(`ローカルの AI の答えを読めませんでした: ${content.slice(0, 200)}`, 502);
     }
-    const { policy, changes } = applyChanges(ep.policy, out.changes);
+    // 最良より明らかに悪ければ、AI の提案は使わず最良の設定に戻す
+    const { policy, changes } = verdict.reverted
+      ? revertTo(ep.policy, best.policy, `最良（${best.metrics.contactsPerMin} 回/分）のときの設定に戻す`)
+      : applyChanges(ep.policy, out.changes);
     const criteriaOut = strings(out.criteria, 5);
     return Response.json({
       ok: true,
@@ -245,6 +292,7 @@ export async function POST(request: Request) {
       changes,
       expectation: typeof out.expectation === "string" ? out.expectation.slice(0, 300) : "",
       policyAfter: policy,
+      verdict,
       // llama-server はモデルのファイルパスを返すので、ファイル名だけにする
       model: (json.model ?? "local").split("/").pop() ?? "local",
       latencyMs: Date.now() - started,

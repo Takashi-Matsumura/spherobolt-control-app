@@ -12,6 +12,11 @@ export type ContactEvent = {
   /** エピソード開始からの経過（ミリ秒） */
   t: number;
   with: BodyKind;
+  /**
+   * 新しい判定で BOLT の位置が飛んだ結果の接触か（前の判定のままの予測では重なっていなかった）。
+   * 予測のずれが原因で、回避の仕方では防げないので、評価からは外す
+   */
+  jump: boolean;
   /** 接触したときの BOLT の状態 */
   boltState: AutopilotState;
   /** 避け始めてから何ミリ秒後の接触か。避けていなければ null（＝気づくのが遅れた） */
@@ -50,8 +55,11 @@ export type Episode = {
 /** 振り返りに使う集計 */
 export type EpisodeMetrics = {
   durationS: number;
+  /** 接触（位置補正によるものは除く） */
   contacts: number;
   contactsPerMin: number;
+  /** 位置補正による接触（予測のずれ。評価には使わない）。古い記録には無い */
+  contactsJump?: number;
   /** 避けていない状態での接触（気づくのが遅れた） */
   contactsUnaware: number;
   /** 避けている最中の接触（避け方が足りなかった） */
@@ -66,12 +74,14 @@ const NEAR_MISS_GAP = 0.03;
 
 export function metricsOf(e: Episode): EpisodeMetrics {
   const min = e.durationMs / 60000;
+  const real = e.contacts.filter((c) => !c.jump);
   return {
     durationS: Math.round(e.durationMs / 1000),
-    contacts: e.contacts.length,
-    contactsPerMin: min > 0 ? Math.round((e.contacts.length / min) * 10) / 10 : 0,
-    contactsUnaware: e.contacts.filter((c) => c.avoidingForMs === null).length,
-    contactsWhileAvoiding: e.contacts.filter((c) => c.avoidingForMs !== null).length,
+    contacts: real.length,
+    contactsPerMin: min > 0 ? Math.round((real.length / min) * 10) / 10 : 0,
+    contactsJump: e.contacts.length - real.length,
+    contactsUnaware: real.filter((c) => c.avoidingForMs === null).length,
+    contactsWhileAvoiding: real.filter((c) => c.avoidingForMs !== null).length,
     avoids: e.avoids.length,
     nearMisses: e.avoids.filter((a) => !a.contacted && a.minGap < NEAR_MISS_GAP).length,
     avgLatencyMs: e.avgLatencyMs,
@@ -170,14 +180,15 @@ export class EpisodeRecorder {
   }
 
   /** 世界が、BOLT が何かと重なり始めたときに呼ぶ */
-  contact(withKind: BodyKind, ghostHeadingOffBolt: number | null) {
+  contact(withKind: BodyKind, ghostHeadingOffBolt: number | null, jump: boolean) {
     const ep = this.ep;
     if (!ep) return;
     const now = Date.now();
-    if (this.avoid) this.avoid.contacted = true;
+    if (this.avoid && !jump) this.avoid.contacted = true;
     ep.contacts.push({
       t: now - ep.startedAt,
       with: withKind,
+      jump,
       boltState: this.bolt.state,
       avoidingForMs: this.avoid ? now - this.avoid.start : null,
       sinceJudgmentMs: this.bolt.judgedAt !== null ? now - this.bolt.judgedAt : null,

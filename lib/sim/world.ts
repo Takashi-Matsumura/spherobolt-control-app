@@ -57,8 +57,10 @@ export function boltRadius(box: { left: number; right: number; top: number; bott
 export class SimWorld {
   obstacles: Obstacle[] = [];
   ghost: Ghost | null = null;
-  /** BOLT とゴースト・障害物がぶつかった回数（重なり始めた回数） */
+  /** BOLT とゴースト・障害物がぶつかった回数（重なり始めた回数。位置補正によるものは除く） */
   contacts = 0;
+  /** 新しい判定で BOLT の位置が飛んだ結果、重なった回数（予測のずれ。回避の仕方では防げない） */
+  jumpContacts = 0;
   /** ゴーストが BOLT を避けるか。false なら障害物だけ避け、BOLT には構わず進む（BOLT の回避を試すとき用） */
   ghostYields = false;
   /** BOLT の回避の基準。振り返りのたびに更新される */
@@ -67,6 +69,8 @@ export class SimWorld {
   readonly recorder = new EpisodeRecorder();
 
   private boltTrack: Track | null = null;
+  /** 新しい判定が届く直前の Track。次のフレームで、位置の飛びによる接触かを見分けるのに使う */
+  private replacedTrack: Track | null = null;
   private touching = new Set<string>();
   private ghostHitAt = -Infinity;
   private nextId = 1;
@@ -75,12 +79,18 @@ export class SimWorld {
 
   /** 自動操縦が判定した BOLT の位置。見えていなければ null（そのときゴーストは BOLT を気にしない） */
   setBoltTrack(track: Track | null) {
+    const prev = this.boltTrack;
+    // 判定（撮った時刻）が変わったときだけ「位置が飛んだかもしれない」として前の Track を覚えておく
+    if (track && prev && track.capturedAt !== prev.capturedAt) this.replacedTrack = prev;
     this.boltTrack = track;
   }
 
   /** 今この瞬間の BOLT（判定した位置に、その後の走行命令で進む分を足した予測） */
   bolt(now = Date.now()): Body | null {
-    const t = this.boltTrack;
+    return this.boltFrom(this.boltTrack, now);
+  }
+
+  private boltFrom(t: Track | null, now: number): Body | null {
     if (!t) return null;
     return {
       kind: "bolt",
@@ -153,6 +163,7 @@ export class SimWorld {
       avoiding: false,
     };
     this.contacts = 0;
+    this.jumpContacts = 0;
     this.touching.clear();
   }
 
@@ -184,7 +195,8 @@ export class SimWorld {
       if (bolt) g.r = bolt.r * MINI_TO_BOLT;
       this.moveGhost(g, bolt, dt, now);
     }
-    this.countContacts(bolt);
+    this.countContacts(bolt, now);
+    this.replacedTrack = null;
   }
 
   private moveGhost(g: Ghost, bolt: Body | null, dt: number, now: number) {
@@ -216,7 +228,7 @@ export class SimWorld {
   }
 
   /** BOLT が何かと重なり始めた回数を数え、走行記録に残す */
-  private countContacts(bolt: Body | null) {
+  private countContacts(bolt: Body | null, at: number) {
     if (!bolt) {
       this.touching.clear();
       return;
@@ -235,17 +247,23 @@ export class SimWorld {
       if (gap < 0) now.add(`obstacle-${o.id}`);
     }
     if (Number.isFinite(minGap)) this.recorder.observeGap(minGap);
+    // 新しい判定が届いたフレームなら、前の判定のままの予測でも重なっていたかを調べる。
+    // 前の予測では重なっていなかったのに重なったなら、BOLT が動いたのではなく位置が補正で飛んだ結果
+    const before = this.boltFrom(this.replacedTrack, at);
     for (const k of now) {
       if (this.touching.has(k)) continue;
-      this.contacts += 1;
+      const other = k === "ghost" ? g : this.obstacles.find((o) => `obstacle-${o.id}` === k);
+      const jump = !!(before && other && gapBetween(before, other, ASPECT) >= 0);
+      if (jump) this.jumpContacts += 1;
+      else this.contacts += 1;
       if (k === "ghost" && g) {
         // ゴーストが BOLT へ向かってきていたか（進む向きと、BOLT への向きの差）
         const toBolt = imageAngle(g.p, bolt.p, ASPECT);
         const off = Math.abs(((((g.angle - toBolt) % 360) + 540) % 360) - 180);
-        this.recorder.contact("ghost", off);
+        this.recorder.contact("ghost", off, jump);
         this.ghostHitAt = Date.now();
       } else {
-        this.recorder.contact("obstacle", null);
+        this.recorder.contact("obstacle", null, jump);
       }
     }
     this.touching = now;
