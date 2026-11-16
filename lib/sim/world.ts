@@ -8,6 +8,8 @@ import { type Point, imageAngle, isNearEdge } from "@/lib/autopilot/geometry";
 import { predictCenter } from "@/lib/autopilot/tracker";
 import type { Track } from "@/lib/autopilot/types";
 import { FRAME_HEIGHT, FRAME_WIDTH } from "@/lib/autopilot/vision-client";
+import { EpisodeRecorder } from "./episode";
+import { type AvoidPolicy, DEFAULT_POLICY } from "./policy";
 import { type Body, type Repulsion, angleVec, gapBetween, repulsion, steerAngle } from "./steer";
 
 /** 映像の縦横比（判定に送るコマと同じ） */
@@ -57,6 +59,10 @@ export class SimWorld {
   contacts = 0;
   /** ゴーストが BOLT を避けるか。false なら障害物だけ避け、BOLT には構わず進む（BOLT の回避を試すとき用） */
   ghostYields = false;
+  /** BOLT の回避の基準。振り返りのたびに更新される */
+  policy: AvoidPolicy = { ...DEFAULT_POLICY };
+  /** 走行記録（自動操縦の開始から停止まで） */
+  readonly recorder = new EpisodeRecorder();
 
   private boltTrack: Track | null = null;
   private touching = new Set<string>();
@@ -73,16 +79,32 @@ export class SimWorld {
   bolt(now = Date.now()): Body | null {
     const t = this.boltTrack;
     if (!t) return null;
-    return { kind: "bolt", p: predictCenter(t.box, t.capturedAt, now, t.segments), r: boltRadius(t.box) };
+    return {
+      kind: "bolt",
+      p: predictCenter(t.box, t.capturedAt, now, t.segments),
+      r: boltRadius(t.box),
+    };
   }
 
-  /** BOLT がぶつからないようにすべき相手（障害物とゴースト） */
-  bodiesForBolt(): Body[] {
-    return this.ghost ? [...this.obstacles, this.ghost] : [...this.obstacles];
+  /**
+   * BOLT がぶつからないようにすべき相手（障害物とゴースト）。
+   * ゴーストは、今の向きと速さで lookaheadMs だけ進んだ先の位置にする（判定の遅れを補う先読み）。
+   */
+  bodiesForBolt(lookaheadMs = this.policy.lookaheadMs): Body[] {
+    const g = this.ghost;
+    if (!g) return [...this.obstacles];
+    const d = angleVec(g.angle);
+    const ahead = (GHOST_SPEED_PER_S * lookaheadMs) / 1000;
+    const p = { x: g.p.x + (d.x * ahead) / ASPECT, y: g.p.y + d.y * ahead };
+    return [...this.obstacles, { kind: "ghost", p, r: g.r }];
   }
 
   setGhostYields(v: boolean) {
     this.ghostYields = v;
+  }
+
+  setPolicy(p: AvoidPolicy) {
+    this.policy = { ...p };
   }
 
   /** p に障害物があれば消し、なければ置く。置いたら true */
@@ -113,7 +135,15 @@ export class SimWorld {
       if (others.every((o) => gapBetween({ kind: "ghost", p, r }, o, ASPECT) > GHOST_CLEARANCE * 2)) break;
     }
     const angle = Math.random() * 360;
-    this.ghost = { kind: "ghost", p, r, angle, wander: angle, nextWanderAt: now + GHOST_WANDER_MS, avoiding: false };
+    this.ghost = {
+      kind: "ghost",
+      p,
+      r,
+      angle,
+      wander: angle,
+      nextWanderAt: now + GHOST_WANDER_MS,
+      avoiding: false,
+    };
     this.contacts = 0;
     this.touching.clear();
   }
@@ -177,16 +207,38 @@ export class SimWorld {
     };
   }
 
-  /** BOLT が何かと重なり始めた回数を数える */
+  /** BOLT が何かと重なり始めた回数を数え、走行記録に残す */
   private countContacts(bolt: Body | null) {
     if (!bolt) {
       this.touching.clear();
       return;
     }
+    const g = this.ghost;
     const now = new Set<string>();
-    if (this.ghost && gapBetween(bolt, this.ghost, ASPECT) < 0) now.add("ghost");
-    for (const o of this.obstacles) if (gapBetween(bolt, o, ASPECT) < 0) now.add(`obstacle-${o.id}`);
-    for (const k of now) if (!this.touching.has(k)) this.contacts += 1;
+    let minGap = Infinity;
+    if (g) {
+      const gap = gapBetween(bolt, g, ASPECT);
+      minGap = gap;
+      if (gap < 0) now.add("ghost");
+    }
+    for (const o of this.obstacles) {
+      const gap = gapBetween(bolt, o, ASPECT);
+      minGap = Math.min(minGap, gap);
+      if (gap < 0) now.add(`obstacle-${o.id}`);
+    }
+    if (Number.isFinite(minGap)) this.recorder.observeGap(minGap);
+    for (const k of now) {
+      if (this.touching.has(k)) continue;
+      this.contacts += 1;
+      if (k === "ghost" && g) {
+        // ゴーストが BOLT へ向かってきていたか（進む向きと、BOLT への向きの差）
+        const toBolt = imageAngle(g.p, bolt.p, ASPECT);
+        const off = Math.abs(((((g.angle - toBolt) % 360) + 540) % 360) - 180);
+        this.recorder.contact("ghost", off);
+      } else {
+        this.recorder.contact("obstacle", null);
+      }
+    }
     this.touching = now;
   }
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { AVOID_CLEARANCE } from "@/lib/autopilot/controller";
 import { ASPECT, type Obstacle, type SimWorld } from "@/lib/sim/world";
 
 const pct = (v: number) => `${(v * 100).toFixed(2)}%`;
@@ -32,6 +31,7 @@ export default function SimOverlay({ world, obstacles, onClick }: Props) {
   const contactsRef = useRef<HTMLSpanElement>(null);
   const boltRef = useRef<HTMLDivElement>(null);
   const boltRingRef = useRef<HTMLDivElement>(null);
+  const aheadRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let raf = 0;
@@ -47,12 +47,19 @@ export default function SimOverlay({ world, obstacles, onClick }: Props) {
         }
       }
       if (arrowRef.current && g) arrowRef.current.style.transform = `rotate(${g.angle}deg)`;
+      // BOLT が避けるときに使う、先読みしたゴーストの位置（先読みしないときは出さない）
+      const ahead = aheadRef.current;
+      if (ahead) {
+        const a = g && world.policy.lookaheadMs > 0 ? world.bodiesForBolt().find((b) => b.kind === "ghost") : null;
+        ahead.style.display = a ? "" : "none";
+        if (a) place(ahead, a.p.x, a.p.y, a.r);
+      }
       if (contactsRef.current) contactsRef.current.textContent = String(world.contacts);
       // シミュレーションが BOLT だと思っている位置と大きさ、その外側の「この輪に入ったら避ける」範囲
       const b = world.bolt();
       for (const [ref, extra] of [
         [boltRef, 0],
-        [boltRingRef, AVOID_CLEARANCE],
+        [boltRingRef, world.policy.clearance],
       ] as const) {
         const e = ref.current;
         if (!e) continue;
@@ -89,7 +96,14 @@ export default function SimOverlay({ world, obstacles, onClick }: Props) {
       ))}
       {/* シミュレーションの中の BOLT（実線）と、障害物やゴーストの縁がここに入ったら避ける範囲（点線） */}
       <div ref={boltRef} className="pointer-events-none absolute rounded-full border-2 border-sky-300" />
-      <div ref={boltRingRef} className="pointer-events-none absolute rounded-full border border-dashed border-sky-300/70" />
+      <div
+        ref={boltRingRef}
+        className="pointer-events-none absolute rounded-full border border-dashed border-sky-300/70"
+      />
+      <div
+        ref={aheadRef}
+        className="pointer-events-none absolute rounded-full border border-dashed border-fuchsia-300/80"
+      />
       {/* ゴースト（仮想の Sphero Mini）。中の線は進む向き */}
       <div
         ref={ghostRef}

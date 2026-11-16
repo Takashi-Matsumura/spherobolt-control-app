@@ -57,16 +57,16 @@ export function repulsion(self: Body, others: Body[], aspect: number, clearance:
   return nearest ? { v: { x: vx, y: vy }, nearest, gap: nearestGap } : null;
 }
 
-/** 押し返しを、行きたい向き goal（長さ 1）より何倍強く効かせるか */
+/** 押し返しを、行きたい向き goal（長さ 1）より何倍強く効かせるか（ゴーストが使う値） */
 export const REPULSION_WEIGHT = 2;
 
 /**
- * 行きたい向き goal に押し返しを足した、映像の中で進む角度（度、y 下向きの atan2）。
+ * 行きたい向き goal に押し返しを weight 倍して足した、映像の中で進む角度（度、y 下向きの atan2）。
  * geometry.ts の imageAngle と同じ角度の測り方。
  */
-export function steerAngle(goal: Vec, rep: Repulsion): number {
-  const x = goal.x + rep.v.x * REPULSION_WEIGHT;
-  const y = goal.y + rep.v.y * REPULSION_WEIGHT;
+export function steerAngle(goal: Vec, rep: Repulsion, weight = REPULSION_WEIGHT): number {
+  const x = goal.x + rep.v.x * weight;
+  const y = goal.y + rep.v.y * weight;
   return (Math.atan2(y, x) * 180) / Math.PI;
 }
 

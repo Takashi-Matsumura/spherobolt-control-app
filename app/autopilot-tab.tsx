@@ -9,7 +9,9 @@ import { SimWorld } from "@/lib/sim/world";
 import Autopilot from "./autopilot";
 import CameraView from "./camera-view";
 import { PILL_BUTTON } from "./handheld/controls";
+import LearningPanel from "./learning-panel";
 import SimOverlay from "./sim-overlay";
+import { useLearning } from "./use-learning";
 
 const STATE_STYLE: Record<AutopilotState, string> = {
   off: "",
@@ -86,6 +88,8 @@ export default function AutopilotTab({ boltRef, connected, active, headingEpoch 
     return () => world.stop();
   }, [simOn, world]);
   const getSim = useCallback(() => (simOnRef.current ? world : null), [world]);
+  // 走行記録と振り返り（自動操縦を止めるたびに、ローカルの AI が回避の基準を見直す）
+  const learning = useLearning(world, simOnRef);
   const toggleObstacle = useCallback(
     (x: number, y: number) => {
       world.toggleObstacleAt({ x, y });
@@ -156,44 +160,55 @@ export default function AutopilotTab({ boltRef, connected, active, headingEpoch 
       headingEpoch={headingEpoch}
       onStatus={setStatus}
       getSim={getSim}
+      onRunningChange={learning.onAutopilotRunning}
       extra={
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <button
-            className={`${PILL_BUTTON} ${simOn ? "text-cyan-300" : ""}`}
-            aria-pressed={simOn}
-            onClick={() => setSimOn((v) => !v)}
-          >
-            シミュレーション {simOn ? "ON" : "OFF"}
-          </button>
-          {simOn && (
-            <>
-              <button
-                className={PILL_BUTTON}
-                onClick={() => {
-                  world.clearObstacles();
-                  setObstacles(world.obstacles);
-                }}
-              >
-                障害物を全部消す
-              </button>
-              <button className={PILL_BUTTON} onClick={() => world.placeGhost()}>
-                ゴーストを置き直す
-              </button>
-              <button
-                className={PILL_BUTTON}
-                aria-pressed={ghostYields}
-                title="「よけない」にすると、ゴーストは BOLT に構わず進むので、BOLT が避けるかを確かめやすくなります"
-                onClick={() => {
-                  world.setGhostYields(!ghostYields);
-                  setGhostYields(!ghostYields);
-                }}
-              >
-                ゴーストは BOLT を{ghostYields ? "よける" : "よけない"}
-              </button>
-              <span className="text-zinc-500">映像をクリックすると、仮想の障害物を置けます（もう一度クリックで消す）</span>
-            </>
-          )}
-        </div>
+        <>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <button
+              className={`${PILL_BUTTON} ${simOn ? "text-cyan-300" : ""}`}
+              aria-pressed={simOn}
+              onClick={() => setSimOn((v) => !v)}
+            >
+              シミュレーション {simOn ? "ON" : "OFF"}
+            </button>
+            {simOn && (
+              <>
+                <button
+                  className={PILL_BUTTON}
+                  onClick={() => {
+                    world.clearObstacles();
+                    setObstacles(world.obstacles);
+                  }}
+                >
+                  障害物を全部消す
+                </button>
+                <button className={PILL_BUTTON} onClick={() => world.placeGhost()}>
+                  ゴーストを置き直す
+                </button>
+                <button
+                  className={PILL_BUTTON}
+                  aria-pressed={ghostYields}
+                  title="「よけない」にすると、ゴーストは BOLT に構わず進むので、BOLT が避けるかを確かめやすくなります"
+                  onClick={() => {
+                    world.setGhostYields(!ghostYields);
+                    setGhostYields(!ghostYields);
+                  }}
+                >
+                  ゴーストは BOLT を{ghostYields ? "よける" : "よけない"}
+                </button>
+                <span className="text-zinc-500">
+                  映像をクリックすると、仮想の障害物を置けます（もう一度クリックで消す）
+                </span>
+              </>
+            )}
+          </div>
+          <LearningPanel
+            notebook={learning.notebook}
+            status={learning.status}
+            onUndo={learning.undo}
+            onReset={learning.reset}
+          />
+        </>
       }
     >
       <CameraView videoRef={videoRef} onRunningChange={setCameraRunning} overlay={overlay} />

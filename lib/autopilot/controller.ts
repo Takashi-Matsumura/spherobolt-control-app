@@ -43,10 +43,6 @@ const STOP_RESEND_MS = 2000;
 export const EDGE_MARGIN = 0.2;
 /** 引き返しは、端からこの割合より内側に戻るまで続ける（行ったり来たりを防ぐ） */
 const RETURN_UNTIL_MARGIN = 0.35;
-/** シミュレーション: 障害物・ゴーストとの隙間がこれより狭くなったら避ける（映像の高さを 1 とした単位） */
-export const AVOID_CLEARANCE = 0.12;
-/** 避け始めたら、隙間がこの倍率まで広がるまで避け続ける（行ったり来たりを防ぐ） */
-const AVOID_UNTIL_FACTOR = 1.5;
 /** Box の確信度がこれ未満なら、位置は当てにしない */
 const MIN_BOX_CONFIDENCE = 0.3;
 
@@ -140,7 +136,9 @@ export function startAutopilot(o: AutopilotOptions): () => void {
     marks.set(state);
     const track = last?.box ? { box: last.box, capturedAt: last.capturedAt, segments: [...segments] } : null;
     // シミュレーションの世界には、見えていて位置が当てになるときだけ BOLT を入れる
-    o.getSim?.()?.setBoltTrack(last && positionOf(last) ? track : null);
+    const sim = o.getSim?.();
+    sim?.setBoltTrack(last && positionOf(last) ? track : null);
+    sim?.recorder.noteBolt({ state, judgedAt: last?.capturedAt ?? null, latencyMs: last?.latencyMs ?? null });
     o.onStatus({
       state,
       visible: last?.visible ?? null,
@@ -178,17 +176,20 @@ export function startAutopilot(o: AutopilotOptions): () => void {
     }
     moving = false;
     returning = false;
+    if (avoiding) o.getSim?.()?.recorder.avoidEnd();
     avoiding = false;
     prevObs = null;
     report("stopped", reason);
   };
 
-  const roll = (h: number) => {
+  /** speedFactor: 速さの倍率（回避中に使う） */
+  const roll = (h: number, speedFactor = 1) => {
     heading = h;
     moving = true;
-    recordCommand(o.speed.current, h);
+    const speed = Math.min(255, Math.round(o.speed.current * speedFactor));
+    recordCommand(speed, h);
     getBolt()
-      ?.roll(o.speed.current, h)
+      ?.roll(speed, h)
       .catch((e) => stop(`走行コマンド失敗: ${(e as Error).message}`));
   };
 
@@ -322,11 +323,9 @@ export function startAutopilot(o: AutopilotOptions): () => void {
   // ---- 走行 ----
 
   /** シミュレーションの障害物・ゴーストのうち、近すぎる相手から離れる向き。近くに何も無ければ null */
-  const threatsAround = (p: Point, r: number): Repulsion | null => {
-    const sim = o.getSim?.();
-    if (!sim) return null;
-    const clearance = AVOID_CLEARANCE * (avoiding ? AVOID_UNTIL_FACTOR : 1);
-    return repulsion({ kind: "bolt", p, r }, sim.bodiesForBolt(), ASPECT, clearance);
+  const threatsAround = (sim: SimWorld, p: Point, r: number): Repulsion | null => {
+    const { clearance, untilFactor } = sim.policy;
+    return repulsion({ kind: "bolt", p, r }, sim.bodiesForBolt(), ASPECT, clearance * (avoiding ? untilFactor : 1));
   };
 
   /** 現在地 p（BOLT の半径 r）から、ランダムに走るか・引き返すか・避けるかを決めて走らせる */
@@ -342,18 +341,23 @@ export function startAutopilot(o: AutopilotOptions): () => void {
     }
 
     const toCenter = imageAngle(p, { x: 0.5, y: 0.5 }, ASPECT);
-    const threat = threatsAround(p, r);
-    if (threat) {
-      if (!avoiding) log(`${BODY_NAME[threat.nearest.kind]}に近づいたので避けます`);
+    const sim = o.getSim?.() ?? null;
+    const threat = sim ? threatsAround(sim, p, r) : null;
+    if (sim && threat) {
+      if (!avoiding) {
+        log(`${BODY_NAME[threat.nearest.kind]}に近づいたので避けます`);
+        sim.recorder.avoidStart(threat.nearest.kind);
+      }
       avoiding = true;
       // 行きたい向き（引き返し中なら中央、そうでなければ今の進む向き）に、押し返しを足した向きへ進む
       const d = directionOf(heading, cal, ASPECT);
       const goal = returning || !moving ? angleVec(toCenter) : { x: d.x * ASPECT, y: d.y };
-      roll(headingFor(steerAngle(goal, threat), cal));
+      roll(headingFor(steerAngle(goal, threat, sim.policy.repulsionWeight), cal), sim.policy.avoidSpeedFactor);
       report("avoiding", `${BODY_NAME[threat.nearest.kind]}を避けています`);
       return;
     }
     if (avoiding) {
+      sim?.recorder.avoidEnd();
       avoiding = false;
       // 避けた向きのまま、しばらく進ませる
       lastTurn = now;

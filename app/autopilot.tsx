@@ -37,6 +37,8 @@ type Props = {
   onStatus: (s: AutopilotStatus) => void;
   /** シミュレーションの世界（使っていなければ null を返す） */
   getSim: () => SimWorld | null;
+  /** 自動操縦が始まった・止まったとき（走行記録の区切りに使う） */
+  onRunningChange?: (running: boolean) => void;
   /** 本体の下に置く操作（シミュレーションの切り替えなど） */
   extra?: React.ReactNode;
   /** 中央に置くカメラ映像 */
@@ -69,6 +71,7 @@ export default function Autopilot({
   headingEpoch,
   onStatus,
   getSim,
+  onRunningChange,
   extra,
   children,
 }: Props) {
@@ -124,7 +127,8 @@ export default function Autopilot({
       onStatus(OFF_STATUS);
       return;
     }
-    return startAutopilot({
+    onRunningChange?.(true);
+    const stop = startAutopilot({
       getBolt: () => boltRef.current,
       getVideo: () => videoRef.current,
       speed: speedRef,
@@ -136,7 +140,11 @@ export default function Autopilot({
       log: addLog,
       getSim,
     });
-  }, [enabled, boltRef, videoRef, onStatus, addLog, saveCalibration, getSim]);
+    return () => {
+      stop();
+      onRunningChange?.(false);
+    };
+  }, [enabled, boltRef, videoRef, onStatus, addLog, saveCalibration, getSim, onRunningChange]);
 
   const adjustSpeed = useCallback(
     (d: number) => setSpeed((v) => Math.min(SPEED_MAX, Math.max(SPEED_MIN, v + d))),
