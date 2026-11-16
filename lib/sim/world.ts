@@ -22,7 +22,7 @@ const DEFAULT_BOLT_RADIUS = 0.06;
 /** ゴーストは Sphero Mini（直径 約 4cm）を想定し、BOLT（約 7.3cm）に対する比で大きさを決める */
 const MINI_TO_BOLT = 4 / 7.3;
 /** ゴーストの速さ（映像の高さを 1 として、1 秒に進む距離） */
-const GHOST_SPEED_PER_S = 0.12;
+export const GHOST_SPEED_PER_S = 0.12;
 /** ゴーストが 1 秒に向きを変えられる角度（急に向きが変わらないように） */
 const GHOST_TURN_DEG_PER_S = 240;
 /** ゴーストがランダムに向きを変える間隔 */

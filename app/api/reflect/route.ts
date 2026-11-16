@@ -2,6 +2,9 @@
 // 気づき・教訓・判断の基準を言葉にさせ、回避の基準（数値）を見直させる。
 // 接続先は環境変数 LOCAL_LLM_URL（既定は http://127.0.0.1:8080）。ブラウザからは指定できない。
 
+import { MIN_INTERVAL_MS } from "@/lib/autopilot/controller";
+import { START_LAG_MS, TURN_MS_PER_180 } from "@/lib/autopilot/tracker";
+import { GHOST_SPEED_PER_S } from "@/lib/sim/world";
 import { type RunSummary, type Verdict, compareRuns } from "@/lib/sim/compare";
 import { type Episode, type EpisodeMetrics, metricsOf } from "@/lib/sim/episode";
 import { type AvoidPolicy, POLICY_KEYS, POLICY_SPEC, type PolicyKey, clampPolicy } from "@/lib/sim/policy";
@@ -16,7 +19,10 @@ const MAX_BODY_BYTES = 200_000;
 const MAX_EVENTS = 25;
 /** 1 回の振り返りで、各数値を範囲の何割まで動かしてよいか（急に変えすぎない） */
 const MAX_STEP_RATIO = 0.25;
-const MAX_CHANGES = 3;
+/** 1 回の振り返りで変える数値は 1 つまで（どの変更が効いたかを、次の走行で切り分けられるように） */
+const MAX_CHANGES = 1;
+/** 判断の基準の数 */
+const MAX_CRITERIA = 5;
 
 let busy = false;
 
@@ -71,7 +77,12 @@ function buildPrompt(ep: Episode, criteria: string[], history: PastReflection[],
 ## 仕組み
 - BOLT の位置は、AI がカメラ画像を判定して求めます。判定には数百ミリ秒かかり、その間は走行命令から位置を予測します。
 - BOLT は判定のたびに、相手との隙間が「避け始める隙間」より狭ければ、相手から離れる向きに走ります。
-- ゴーストは${ep.ghostYields ? " BOLT を避けます" : " BOLT を避けず、気ままに走ります"}。
+- ゴーストは${ep.ghostYields ? " BOLT を避けます" : " BOLT を避けず、気ままに走ります"}。速さは映像の高さの ${GHOST_SPEED_PER_S * 100}%/秒。
+
+## BOLT の反応の限界（数値では変えられない）
+- BOLT が向きを決め直すのは判定のたびだけ。判定の間隔は「応答時間＋${MIN_INTERVAL_MS}ms」程度（今回は平均 ${m.avgLatencyMs !== null ? m.avgLatencyMs + MIN_INTERVAL_MS : "不明"}ms）。
+- 止まった状態から動き出すまで約 ${START_LAG_MS}ms、180° 向きを変えるのに約 ${TURN_MS_PER_180}ms かかる。
+- そのため、判定の間隔より短い時間で急に近づかれた接触は、押し返しの強さや回避中の速さを上げても防げない。早く気づく（避け始める隙間・先読み）か、受け入れるしかない。
 
 ## 今の回避の基準（変えられる数値）
 ${params}
@@ -103,11 +114,15 @@ ${criteria.length ? criteria.map((c) => `- ${c}`).join("\n") : "（まだあり�
 ## お願い
 1. 記録から読み取れることを observations に書く（1〜4 個）。数字を根拠にする。
 2. 今回の教訓を lessons に書く（1〜3 個）。
-3. これまでの判断の基準を見直し、次から守る基準を criteria に書き直す（最大 5 個）。前回の変更で良くなったか悪くなったかも考える。
+3. これまでの判断の基準を見直し、次から守る基準を criteria に書き直す（最大 ${MAX_CRITERIA} 個）。
+   基準は「どんな状況で、何を優先するか」という原則として書き、数字や数値の名前（clearance など）は書かない。
+   例:「判定の間隔より短い時間で起きた接触は、押し返しではなく早く気づくことで減らす」。
 ${
   verdict.reverted
     ? "4. 今回はアプリが最良の設定に戻すので、changes は空にする。"
-    : `4. 数値の変更を changes に書く（0〜${MAX_CHANGES} 個）。1 回で大きく変えすぎない。比較の判定をもとに、悪くなった変更は戻し、差がばらつきの範囲内なら変えずにもう一度試すことも選べる。数値は下げてもよい。理由も書く。`
+    : `4. 数値の変更を changes に書く。変えるのは 1 つだけ（どの変更が効いたかを次の走行で切り分けるため）。変えなくてもよい（空にする）。
+   1 回で大きく変えすぎない。比較の判定をもとに、悪くなった変更は戻し、差がばらつきの範囲内なら変えずにもう一度試すことも選べる。
+   数値は下げてもよい。上げるだけでなく、避けすぎ（回避が長く続く）も疑う。理由も書く。`
 }
 5. 次の走行で期待することを expectation に 1 文で書く。
 すべて日本語で、短く具体的に書く。`;
@@ -132,7 +147,7 @@ const RESPONSE_SCHEMA = {
       type: "array",
       items: { type: "string" },
       minItems: 1,
-      maxItems: 5,
+      maxItems: MAX_CRITERIA,
     },
     changes: {
       type: "array",
@@ -234,7 +249,7 @@ export async function POST(request: Request) {
     return fail("走行記録の形が正しくありません", 400);
   }
   ep.policy = clampPolicy(ep.policy ?? {});
-  const criteria = strings(req.criteria, 5);
+  const criteria = strings(req.criteria, MAX_CRITERIA);
   const history = Array.isArray(req.history) ? req.history.slice(0, 5) : [];
   const runs = sanitizeRuns(req.runs);
   const current: RunSummary = { metrics: metricsOf(ep), policy: ep.policy };
@@ -283,7 +298,8 @@ export async function POST(request: Request) {
     const { policy, changes } = verdict.reverted
       ? revertTo(ep.policy, best.policy, `最良（${best.metrics.contactsPerMin} 回/分）のときの設定に戻す`)
       : applyChanges(ep.policy, out.changes);
-    const criteriaOut = strings(out.criteria, 5);
+    // 判断の基準は原則だけにする（数字を含むものは、今の数値の書き写しになりやすいので捨てる）
+    const criteriaOut = strings(out.criteria, MAX_CRITERIA).filter((c) => !/[0-9０-９]/.test(c));
     return Response.json({
       ok: true,
       observations: strings(out.observations, 4),

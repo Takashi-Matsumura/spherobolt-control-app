@@ -31,7 +31,7 @@ import type { AutopilotState, AutopilotStatus } from "./types";
 import { FRAME_HEIGHT, FRAME_WIDTH, type Judgment, judgeFrame } from "./vision-client";
 
 /** 判定の間隔の下限（応答が速くてもこれより頻繁には送らない） */
-const MIN_INTERVAL_MS = 300;
+export const MIN_INTERVAL_MS = 300;
 /** これ以上「写っている」判定が来なければ止める（見張りタイマー） */
 const WATCHDOG_MS = 1500;
 /** 走行中に向きを変える間隔 */
