@@ -42,8 +42,13 @@ export default function SimOverlay({ world, obstacles, onClick }: Props) {
         el.style.display = g ? "" : "none";
         if (g) {
           place(el, g.p.x, g.p.y, g.r);
-          el.classList.toggle("border-cyan-300", g.avoiding);
-          el.classList.toggle("border-fuchsia-300", !g.avoiding);
+          // BOLT に触れたら赤、避けているときは水色、ふだんはピンク
+          const hit = world.ghostHit();
+          el.classList.toggle("border-red-500", hit);
+          el.classList.toggle("bg-red-500/60", hit);
+          el.classList.toggle("border-cyan-300", !hit && g.avoiding);
+          el.classList.toggle("border-fuchsia-300", !hit && !g.avoiding);
+          el.classList.toggle("bg-fuchsia-400/30", !hit);
         }
       }
       if (arrowRef.current && g) arrowRef.current.style.transform = `rotate(${g.angle}deg)`;

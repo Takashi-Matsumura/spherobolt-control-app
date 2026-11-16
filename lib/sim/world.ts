@@ -31,6 +31,8 @@ const GHOST_WANDER_MS = 2500;
 const GHOST_EDGE_MARGIN = 0.12;
 /** ゴーストが相手との間に空けようとする隙間 */
 export const GHOST_CLEARANCE = 0.08;
+/** ゴーストが BOLT に触れたあと、赤く光り続ける最短の時間（一瞬の接触でも見えるように） */
+const GHOST_HIT_SHOW_MS = 800;
 /** 1 フレームの経過時間の上限（タブが裏に回って戻ったときに飛ばないように） */
 const MAX_STEP_MS = 100;
 
@@ -66,6 +68,7 @@ export class SimWorld {
 
   private boltTrack: Track | null = null;
   private touching = new Set<string>();
+  private ghostHitAt = -Infinity;
   private nextId = 1;
   private raf = 0;
   private lastStep = 0;
@@ -97,6 +100,11 @@ export class SimWorld {
     const ahead = (GHOST_SPEED_PER_S * lookaheadMs) / 1000;
     const p = { x: g.p.x + (d.x * ahead) / ASPECT, y: g.p.y + d.y * ahead };
     return [...this.obstacles, { kind: "ghost", p, r: g.r }];
+  }
+
+  /** ゴーストが BOLT に触れているか（離れてからも少しの間は true） */
+  ghostHit(now = Date.now()): boolean {
+    return this.touching.has("ghost") || now - this.ghostHitAt < GHOST_HIT_SHOW_MS;
   }
 
   setGhostYields(v: boolean) {
@@ -235,6 +243,7 @@ export class SimWorld {
         const toBolt = imageAngle(g.p, bolt.p, ASPECT);
         const off = Math.abs(((((g.angle - toBolt) % 360) + 540) % 360) - 180);
         this.recorder.contact("ghost", off);
+        this.ghostHitAt = Date.now();
       } else {
         this.recorder.contact("obstacle", null);
       }
