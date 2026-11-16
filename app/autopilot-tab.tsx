@@ -1,12 +1,15 @@
 "use client";
 
-import { type RefObject, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { OFF_STATUS } from "@/lib/autopilot/controller";
 import { predictBox } from "@/lib/autopilot/tracker";
 import type { AutopilotState, AutopilotStatus, Track } from "@/lib/autopilot/types";
 import type { Bolt } from "@/lib/bolt/bolt";
+import { SimWorld } from "@/lib/sim/world";
 import Autopilot from "./autopilot";
 import CameraView from "./camera-view";
+import { PILL_BUTTON } from "./handheld/controls";
+import SimOverlay from "./sim-overlay";
 
 const STATE_STYLE: Record<AutopilotState, string> = {
   off: "",
@@ -14,6 +17,7 @@ const STATE_STYLE: Record<AutopilotState, string> = {
   calibrating: "bg-sky-600/85",
   moving: "bg-emerald-600/85",
   returning: "bg-amber-600/85",
+  avoiding: "bg-cyan-600/85",
   stopped: "bg-red-600/85",
 };
 
@@ -23,6 +27,7 @@ const STATE_LABEL: Record<AutopilotState, string> = {
   calibrating: "向き合わせ中",
   moving: "走行中",
   returning: "引き返し中",
+  avoiding: "回避中",
   stopped: "停止中",
 };
 
@@ -67,12 +72,37 @@ export default function AutopilotTab({ boltRef, connected, active, headingEpoch 
   const [cameraRunning, setCameraRunning] = useState(false);
   const [status, setStatus] = useState<AutopilotStatus>(OFF_STATUS);
 
+  // シミュレーション: 映像の上に仮想の障害物とゴーストを置き、自動操縦の BOLT に避けさせる
+  const [world] = useState(() => new SimWorld());
+  const [simOn, setSimOn] = useState(false);
+  // 描くための障害物の一覧（世界は置き直すたびに新しい配列にするので、それを受け取る）
+  const [obstacles, setObstacles] = useState(world.obstacles);
+  const simOnRef = useRef(simOn);
+  useEffect(() => {
+    simOnRef.current = simOn;
+    if (!simOn) return;
+    world.start();
+    return () => world.stop();
+  }, [simOn, world]);
+  const getSim = useCallback(() => (simOnRef.current ? world : null), [world]);
+  const toggleObstacle = useCallback(
+    (x: number, y: number) => {
+      world.toggleObstacleAt({ x, y });
+      setObstacles(world.obstacles);
+    },
+    [world],
+  );
+
   const track = status.track;
   const showBox = track && status.visible !== null && status.visible >= 0.5;
   const m = status.edgeMargin;
+  const simOverlay = simOn && <SimOverlay world={world} obstacles={obstacles} onClick={toggleObstacle} />;
   const overlay =
-    status.state === "off" ? null : (
+    status.state === "off" ? (
+      simOverlay
+    ) : (
       <>
+        {simOverlay}
         {/* この線より外側に入ると引き返す */}
         <div
           className="pointer-events-none absolute border border-dashed border-white/50"
@@ -124,6 +154,35 @@ export default function AutopilotTab({ boltRef, connected, active, headingEpoch 
       active={active}
       headingEpoch={headingEpoch}
       onStatus={setStatus}
+      getSim={getSim}
+      extra={
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <button
+            className={`${PILL_BUTTON} ${simOn ? "text-cyan-300" : ""}`}
+            aria-pressed={simOn}
+            onClick={() => setSimOn((v) => !v)}
+          >
+            シミュレーション {simOn ? "ON" : "OFF"}
+          </button>
+          {simOn && (
+            <>
+              <button
+                className={PILL_BUTTON}
+                onClick={() => {
+                  world.clearObstacles();
+                  setObstacles(world.obstacles);
+                }}
+              >
+                障害物を全部消す
+              </button>
+              <button className={PILL_BUTTON} onClick={() => world.placeGhost()}>
+                ゴーストを置き直す
+              </button>
+              <span className="text-zinc-500">映像をクリックすると、仮想の障害物を置けます（もう一度クリックで消す）</span>
+            </>
+          )}
+        </div>
+      }
     >
       <CameraView videoRef={videoRef} onRunningChange={setCameraRunning} overlay={overlay} />
     </Autopilot>

@@ -28,6 +28,7 @@ const TEST_MARKS: { state: MarkState; label: string }[] = [
   { state: "calibrating", label: "向き合わせ中（紫のくるくる）" },
   { state: "moving", label: "走行中（緑の矢印）" },
   { state: "returning", label: "引き返し中（黄色の U ターン）" },
+  { state: "avoiding", label: "回避中（水色の ！）" },
   { state: "stopped", label: "止まった（赤の ✕）" },
   { state: "off", label: "消灯" },
 ];

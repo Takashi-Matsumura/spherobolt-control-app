@@ -4,6 +4,8 @@
 import type { Bolt } from "@/lib/bolt/bolt";
 import { MatrixPainter } from "@/lib/bolt/matrix";
 import { StatusMarks } from "@/lib/bolt/marks";
+import { BODY_NAME, type Repulsion, angleVec, repulsion, steerAngle } from "@/lib/sim/steer";
+import { type SimWorld, boltRadius } from "@/lib/sim/world";
 import {
   type Calibration,
   type Point,
@@ -17,6 +19,7 @@ import {
 import {
   type Command,
   type Segment,
+  directionOf,
   displacement,
   gainFromPulse,
   predictCenter,
@@ -40,6 +43,10 @@ const STOP_RESEND_MS = 2000;
 export const EDGE_MARGIN = 0.2;
 /** 引き返しは、端からこの割合より内側に戻るまで続ける（行ったり来たりを防ぐ） */
 const RETURN_UNTIL_MARGIN = 0.35;
+/** シミュレーション: 障害物・ゴーストとの隙間がこれより狭くなったら避ける（映像の高さを 1 とした単位） */
+const AVOID_CLEARANCE = 0.12;
+/** 避け始めたら、隙間がこの倍率まで広がるまで避け続ける（行ったり来たりを防ぐ） */
+const AVOID_UNTIL_FACTOR = 1.5;
 /** Box の確信度がこれ未満なら、位置は当てにしない */
 const MIN_BOX_CONFIDENCE = 0.3;
 
@@ -92,6 +99,8 @@ export type AutopilotOptions = {
   saveCalibration: (c: Calibration, gain: number) => void;
   onStatus: (s: AutopilotStatus) => void;
   log: (msg: string) => void;
+  /** シミュレーションの世界。null ならシミュレーションなし（障害物もゴーストも無い） */
+  getSim?: () => SimWorld | null;
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -103,6 +112,7 @@ export function startAutopilot(o: AutopilotOptions): () => void {
   let cancelled = false;
   let moving = false;
   let returning = false;
+  let avoiding = false;
   let heading = 0;
   let lastSeen = 0;
   let lastTurn = 0;
@@ -128,12 +138,15 @@ export function startAutopilot(o: AutopilotOptions): () => void {
 
   const report = (state: AutopilotState, reason: string) => {
     marks.set(state);
+    const track = last?.box ? { box: last.box, capturedAt: last.capturedAt, segments: [...segments] } : null;
+    // シミュレーションの世界には、見えていて位置が当てになるときだけ BOLT を入れる
+    o.getSim?.()?.setBoltTrack(last && positionOf(last) ? track : null);
     o.onStatus({
       state,
       visible: last?.visible ?? null,
       latencyMs: last?.latencyMs ?? null,
       reason,
-      track: last?.box ? { box: last.box, capturedAt: last.capturedAt, segments: [...segments] } : null,
+      track,
       edgeMargin: EDGE_MARGIN,
     });
   };
@@ -165,6 +178,7 @@ export function startAutopilot(o: AutopilotOptions): () => void {
     }
     moving = false;
     returning = false;
+    avoiding = false;
     prevObs = null;
     report("stopped", reason);
   };
@@ -307,8 +321,16 @@ export function startAutopilot(o: AutopilotOptions): () => void {
 
   // ---- 走行 ----
 
-  /** 現在地 p から、ランダムに走るか中央へ引き返すかを決めて走らせる */
-  const drive = (p: Point) => {
+  /** シミュレーションの障害物・ゴーストのうち、近すぎる相手から離れる向き。近くに何も無ければ null */
+  const threatsAround = (p: Point, r: number): Repulsion | null => {
+    const sim = o.getSim?.();
+    if (!sim) return null;
+    const clearance = AVOID_CLEARANCE * (avoiding ? AVOID_UNTIL_FACTOR : 1);
+    return repulsion({ kind: "bolt", p, r }, sim.bodiesForBolt(), ASPECT, clearance);
+  };
+
+  /** 現在地 p（BOLT の半径 r）から、ランダムに走るか・引き返すか・避けるかを決めて走らせる */
+  const drive = (p: Point, r: number) => {
     const cal = o.calibration.current!;
     const now = Date.now();
     if (returning && !isNearEdge(p, RETURN_UNTIL_MARGIN)) {
@@ -319,9 +341,28 @@ export function startAutopilot(o: AutopilotOptions): () => void {
       log("画面の端に近づいたので中央へ引き返します");
     }
 
+    const toCenter = imageAngle(p, { x: 0.5, y: 0.5 }, ASPECT);
+    const threat = threatsAround(p, r);
+    if (threat) {
+      if (!avoiding) log(`${BODY_NAME[threat.nearest.kind]}に近づいたので避けます`);
+      avoiding = true;
+      // 行きたい向き（引き返し中なら中央、そうでなければ今の進む向き）に、押し返しを足した向きへ進む
+      const d = directionOf(heading, cal, ASPECT);
+      const goal = returning || !moving ? angleVec(toCenter) : { x: d.x * ASPECT, y: d.y };
+      roll(headingFor(steerAngle(goal, threat), cal));
+      report("avoiding", `${BODY_NAME[threat.nearest.kind]}を避けています`);
+      return;
+    }
+    if (avoiding) {
+      avoiding = false;
+      // 避けた向きのまま、しばらく進ませる
+      lastTurn = now;
+      log("回避を終えました");
+    }
+
     if (returning) {
       // 判定のたびに、現在地から中央への方向に向け直す
-      roll(headingFor(imageAngle(p, { x: 0.5, y: 0.5 }, ASPECT), cal));
+      roll(headingFor(toCenter, cal));
       report("returning", "画面の端に近いので中央へ戻っています");
       return;
     }
@@ -356,7 +397,7 @@ export function startAutopilot(o: AutopilotOptions): () => void {
         } else {
           lastSeen = Date.now();
           // 判定は撮った時点の位置なので、そこから今までに進んだ分を足した現在地で判断する
-          drive(predictCenter(j.box!, j.capturedAt, Date.now(), segments));
+          drive(predictCenter(j.box!, j.capturedAt, Date.now(), segments), boltRadius(j.box!));
         }
       } catch (e) {
         if (cancelled) break;

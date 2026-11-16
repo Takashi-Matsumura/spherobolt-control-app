@@ -5,6 +5,7 @@ import type { Bolt } from "@/lib/bolt/bolt";
 import { OFF_STATUS, startAutopilot } from "@/lib/autopilot/controller";
 import type { Calibration } from "@/lib/autopilot/geometry";
 import type { AutopilotStatus } from "@/lib/autopilot/types";
+import type { SimWorld } from "@/lib/sim/world";
 import {
   ActionButton,
   ChevronIcon,
@@ -34,6 +35,10 @@ type Props = {
   /** BOLT の向きの基準が変わるたびに増える番号。向き合わせの有効性の判定に使う */
   headingEpoch: number;
   onStatus: (s: AutopilotStatus) => void;
+  /** シミュレーションの世界（使っていなければ null を返す） */
+  getSim: () => SimWorld | null;
+  /** 本体の下に置く操作（シミュレーションの切り替えなど） */
+  extra?: React.ReactNode;
   /** 中央に置くカメラ映像 */
   children: React.ReactNode;
 };
@@ -63,6 +68,8 @@ export default function Autopilot({
   active,
   headingEpoch,
   onStatus,
+  getSim,
+  extra,
   children,
 }: Props) {
   const [enabled, setEnabled] = useState(false);
@@ -127,8 +134,9 @@ export default function Autopilot({
       saveCalibration,
       onStatus,
       log: addLog,
+      getSim,
     });
-  }, [enabled, boltRef, videoRef, onStatus, addLog, saveCalibration]);
+  }, [enabled, boltRef, videoRef, onStatus, addLog, saveCalibration, getSim]);
 
   const adjustSpeed = useCallback(
     (d: number) => setSpeed((v) => Math.min(SPEED_MAX, Math.max(SPEED_MIN, v + d))),
@@ -248,6 +256,8 @@ export default function Autopilot({
       >
         {children}
       </HandheldShell>
+
+      {extra}
 
       {/* 本体の下: ログと説明 */}
       <details className="rounded-lg border border-zinc-300 p-3 dark:border-zinc-700" open>

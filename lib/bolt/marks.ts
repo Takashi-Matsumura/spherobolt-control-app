@@ -49,6 +49,17 @@ export const MARKS = {
     "#....#..",
     "#.......",
   ],
+  /** ！（シミュレーションの障害物・ゴーストを避けている） */
+  alert: [
+    "...##...",
+    "...##...",
+    "...##...",
+    "...##...",
+    "...##...",
+    "........",
+    "...##...",
+    "...##...",
+  ],
   /** ✕（止まった・見失った） */
   cross: [
     "#......#",
@@ -88,6 +99,7 @@ export const COLORS = {
   purple: [170, 0, 255],
   green: [0, 200, 40],
   yellow: [255, 170, 0],
+  cyan: [0, 200, 200],
   red: [255, 0, 0],
 } as const satisfies Record<string, Rgb>;
 
@@ -106,6 +118,8 @@ export function autopilotFrame(state: AutopilotState, tick: number): Frame {
       return { rows: MARKS.arrow, color: COLORS.green };
     case "returning":
       return { rows: MARKS.uturn, color: COLORS.yellow };
+    case "avoiding":
+      return { rows: MARKS.alert, color: COLORS.cyan };
     case "stopped":
       return { rows: MARKS.cross, color: COLORS.red };
     case "off":
